@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { 
   ReactFlow, 
   Background, 
@@ -22,7 +22,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { WorkspaceNode, WorkspaceEdge, WorkspaceNodeData, PathData } from '../types';
 import { motion } from 'motion/react';
-import { StickyNote, Maximize2, Trash2, Link, Edit3 } from 'lucide-react';
+import { StickyNote, Maximize2, Trash2, Link, Edit3, Quote, Copy } from 'lucide-react';
 import { getStroke } from 'perfect-freehand';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -43,31 +43,53 @@ function getSvgPathFromStroke(stroke: number[][]) {
 
 // ... keeping custom nodes ...
 const PDFSnippetNode = ({ data }: NodeProps<WorkspaceNode>) => {
+  const [copied, setCopied] = useState(false);
+
+  const copyToClipboard = () => {
+    if (data.content) {
+      navigator.clipboard.writeText(data.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.9, y: 10 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      className="bg-white border border-slate-200 rounded shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden min-w-[240px] max-w-[400px]"
+      className="bg-white border border-slate-200 rounded shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden min-w-[240px] max-w-[400px] border-b-2 border-b-indigo-100"
     >
       <Handle type="target" position={Position.Top} className="w-1.5 h-1.5 !bg-slate-300 border-none" />
       
       <div className="px-3 py-1.5 bg-[#fcfcf7] border-b border-slate-100 flex items-center justify-between">
-         <span className="text-[9px] font-sans font-bold text-slate-400 uppercase tracking-widest">Document Fragment</span>
+         <div className="flex items-center gap-2">
+           <Quote size={10} className="text-indigo-400" />
+           <span className="text-[9px] font-sans font-bold text-slate-400 uppercase tracking-widest leading-none">Document Fragment</span>
+         </div>
+         {data.content && (
+           <button 
+             onClick={copyToClipboard}
+             className="text-slate-400 hover:text-indigo-600 transition-all active:scale-95"
+             title="Copy extracted text"
+           >
+             {copied ? <span className="text-[8px] font-bold text-emerald-500 lowercase tracking-normal bg-emerald-50 px-1 rounded">Copied!</span> : <Copy size={10} />}
+           </button>
+         )}
       </div>
 
       {data.imageUrl && (
-        <div className="bg-[#fafafa] p-2 overflow-hidden flex items-center justify-center">
+        <div className="bg-[#fafafa] p-2 overflow-hidden flex items-center justify-center border-b border-slate-50">
           <img src={data.imageUrl} alt="Clip" className="w-full h-auto rounded border border-slate-200" />
         </div>
       )}
       
-      <div className="p-4 pt-2">
+      <div className="p-4 pt-3">
         {data.content && (
-          <div className="bg-[#fdfcf0] p-3 rounded text-[11px] text-slate-800 font-sans border-l-2 border-slate-300 italic mb-3 leading-relaxed">
+          <div className="bg-[#fefce8]/40 p-3 rounded text-[11px] text-slate-800 font-sans border-l-2 border-indigo-400/50 italic mb-3 leading-relaxed">
             "{data.content}"
           </div>
         )}
-        <div className="text-[11px] text-slate-500 leading-relaxed font-sans">
+        <div className="text-[11px] text-slate-500 leading-relaxed font-sans font-medium">
           {data.label}
         </div>
       </div>
@@ -80,46 +102,57 @@ const PDFSnippetNode = ({ data }: NodeProps<WorkspaceNode>) => {
 const NoteNode = ({ id, data }: NodeProps<WorkspaceNode>) => {
   const { setNodes } = useReactFlow();
   const [isEditing, setIsEditing] = useState(false);
+  const editRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isEditing && editRef.current) {
+      editRef.current.focus();
+      if (editRef.current.innerText === 'Add text') {
+        const range = document.createRange();
+        range.selectNodeContents(editRef.current);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      }
+    }
+  }, [isEditing]);
 
   const onUpdate = (e: React.FormEvent<HTMLDivElement>) => {
     const text = e.currentTarget.innerText;
-    setNodes((nds) => nds.map((node) => node.id === id ? { ...node, data: { ...node.data, label: text } } : node));
+    setNodes((nds) => nds.map((node) => node.id === id ? { ...node, data: { ...node.data, label: text || 'Add text' } } : node));
     setIsEditing(false);
   };
 
   return (
     <motion.div 
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="bg-white p-4 rounded shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-200 min-w-[200px] max-w-[300px] group relative"
+      initial={{ opacity: 0, scale: 0.9, rotate: -1 }}
+      animate={{ opacity: 1, scale: 1, rotate: 0 }}
+      onDoubleClick={() => setIsEditing(true)}
+      className="bg-[#fef9c3] p-6 shadow-[0_10px_15px_-3px_rgba(0,0,0,0.1),0_4px_6px_-2px_rgba(0,0,0,0.05)] border-t border-white/40 w-[220px] h-[220px] group relative flex items-center justify-center text-center cursor-pointer"
     >
-      <Handle type="target" position={Position.Top} className="w-1.5 h-1.5 !bg-slate-300 border-none" />
-      <div className="flex items-center justify-between mb-2 text-[#64748b]">
-        <div className="flex items-center gap-2">
-          <StickyNote size={14} />
-          <span className="text-[10px] font-sans font-bold uppercase tracking-widest">Annotation</span>
-        </div>
-        <button 
-          onClick={(e) => { e.stopPropagation(); setIsEditing(!isEditing); }}
-          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-slate-100 rounded transition-all text-indigo-500"
-          title="Edit Note"
-        >
-          <Edit3 size={12} />
-        </button>
-      </div>
+      <Handle type="target" position={Position.Top} className="w-1.5 h-1.5 !bg-yellow-600/20 border-none opacity-0 group-hover:opacity-100 transition-opacity" />
       
-      <div 
-        className={`text-sm font-sans text-slate-800 leading-relaxed min-h-[40px] outline-none cursor-text ${isEditing ? 'bg-slate-50 rounded p-1 ring-1 ring-slate-200' : ''}`} 
-        contentEditable={isEditing}
-        onDoubleClick={() => setIsEditing(true)}
-        suppressContentEditableWarning
-        onBlur={onUpdate}
-        autoFocus={isEditing}
+      <button 
+        onClick={(e) => { e.stopPropagation(); setIsEditing(!isEditing); }}
+        className="absolute top-2 right-2 opacity-0 group-hover:opacity-40 p-1 hover:bg-yellow-200/50 rounded transition-all text-yellow-800 z-20"
+        title="Edit Note"
       >
-        {data.label}
+        <Edit3 size={12} />
+      </button>
+
+      <div className="w-full max-h-full overflow-y-auto custom-scrollbar pr-1 py-1">
+        <div 
+          ref={editRef}
+          className={`text-sm font-sans text-yellow-900 font-medium leading-relaxed outline-none cursor-text w-full break-words whitespace-pre-wrap ${isEditing ? 'bg-white/30 rounded p-1 ring-1 ring-yellow-400/30' : ''}`} 
+          contentEditable={isEditing}
+          suppressContentEditableWarning
+          onBlur={onUpdate}
+        >
+          {data.label}
+        </div>
       </div>
 
-      <Handle type="source" position={Position.Bottom} className="w-1.5 h-1.5 !bg-slate-300 border-none" />
+      <Handle type="source" position={Position.Bottom} className="w-1.5 h-1.5 !bg-yellow-600/20 border-none opacity-0 group-hover:opacity-100 transition-opacity" />
     </motion.div>
   );
 };
@@ -157,13 +190,13 @@ const IdeaNode = ({ id, data }: NodeProps<WorkspaceNode>) => {
            onBlur={() => setIsEditing(false)}
            onDoubleClick={(e) => e.stopPropagation()}
            onChange={onUpdate}
-           className="bg-transparent text-sm font-sans font-medium text-center outline-none w-full resize-none h-auto"
+           className="bg-transparent text-sm font-sans font-medium text-center outline-none w-full resize-none h-auto break-words"
            value={data.label}
         />
       ) : (
         <div 
           onDoubleClick={() => setIsEditing(true)}
-          className="text-sm font-sans font-medium tracking-tight leading-snug cursor-text"
+          className="text-sm font-sans font-medium tracking-tight leading-snug cursor-text break-words whitespace-pre-wrap"
         >
           {data.label}
         </div>
@@ -269,6 +302,19 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
     }
   };
 
+  const onNodeClick = (_: React.MouseEvent, node: WorkspaceNode) => {
+    if (drawingTool === 'eraser') {
+      setNodes((nds) => nds.filter((n) => n.id !== node.id));
+      setEdges((eds) => eds.filter((e) => e.source !== node.id && e.target !== node.id));
+    }
+  };
+
+  const onEdgeClick = (_: React.MouseEvent, edge: WorkspaceEdge) => {
+    if (drawingTool === 'eraser') {
+      setEdges((eds) => eds.filter((e) => e.id !== edge.id));
+    }
+  };
+
   const onNodesChange: OnNodesChange<WorkspaceNode> = (changes) => {
     setNodes((nds) => applyNodeChanges(changes, nds));
   };
@@ -282,13 +328,15 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
   };
 
   return (
-    <div className={`w-full h-full relative overflow-hidden ${isDrawing ? 'cursor-crosshair' : ''}`}>
+    <div className={`w-full h-full relative overflow-hidden ${isDrawing ? 'cursor-crosshair' : drawingTool === 'eraser' ? 'eraser-mode active cursor-crosshair' : ''}`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onNodeClick={onNodeClick}
+        onEdgeClick={onEdgeClick}
         nodeTypes={nodeTypes}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}

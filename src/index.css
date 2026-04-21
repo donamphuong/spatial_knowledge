@@ -55,3 +55,20 @@
 .react-flow__controls-button:hover {
   background-color: #f8fafc !important;
 }
+
+/* Eraser Mode Feedback */
+.eraser-mode .react-flow__node:hover {
+  outline: 2px solid #ef4444 !important;
+  cursor: pointer !important;
+}
+
+.eraser-mode .react-flow__edge:hover .react-flow__edge-path {
+  stroke: #ef4444 !important;
+  stroke-width: 3 !important;
+  cursor: pointer !important;
+}
+
+.eraser-mode path:hover {
+  filter: drop-shadow(0 0 4px #ef4444) !important;
+  cursor: pointer !important;
+}

@@ -1,12 +1,19 @@
 import { Node, Edge } from '@xyflow/react';
 
-export interface FileItem {
+export type ExplorerItemType = 'folder' | 'map' | 'pdf' | 'note';
+
+export interface ExplorerItem {
   id: string;
   name: string;
-  type: 'pdf' | 'note' | 'folder';
+  type: ExplorerItemType;
   parentId: string | null;
-  content?: string; // URL for PDF, text for Note
-  data?: any;
+  // Map specific data
+  nodes?: WorkspaceNode[];
+  edges?: WorkspaceEdge[];
+  paths?: PathData[];
+  // File/Note/Folder data
+  content?: string;
+  lastModified?: string;
 }
 
 export type WorkspaceNodeData = {
@@ -28,3 +35,4 @@ export interface PathData {
   width: number;
   opacity: number;
 }
+

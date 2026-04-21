@@ -23,32 +23,253 @@ import {
   Pen,
   Highlighter,
   Eraser,
-  Palette
+  Palette,
+  Save,
+  Download
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import { WorkspaceNode, WorkspaceEdge, FileItem, PathData } from './types';
+import { WorkspaceNode, WorkspaceEdge, PathData, ExplorerItem } from './types';
 import InfiniteCanvas from './components/InfiniteCanvas';
 import PDFViewerModal from './components/PDFViewerModal';
 import Sidebar from './components/Sidebar';
 
+const DEFAULT_ITEMS: ExplorerItem[] = [
+  {
+    id: 'map-1',
+    name: 'Main Research Map',
+    type: 'map',
+    parentId: null,
+    nodes: [],
+    edges: [],
+    paths: [],
+    lastModified: new Date().toISOString()
+  }
+];
+
+import { get, set, del, update } from 'idb-keyval';
+
+// OBSIDIAN-STYLE LOCAL-FIRST STORAGE ENGINE
+// 1. Storage Keys: 
+//    'explorer-metadata' -> The tree structure (id, name, type, parentId)
+//    'content-{id}' -> The heavy lifting (nodes, edges, paths, or text content)
+
+interface WorkspaceContent {
+  nodes?: WorkspaceNode[];
+  edges?: WorkspaceEdge[];
+  paths?: PathData[];
+  content?: string;
+}
+
+const saveMetadata = async (items: ExplorerItem[]) => {
+  // Strip content before saving metadata to keep the index tiny and fast
+  const metadata = items.map(({ id, name, type, parentId, lastModified }) => ({
+    id, name, type, parentId, lastModified
+  }));
+  await set('explorer-metadata', metadata);
+};
+
+const saveContent = async (id: string, content: WorkspaceContent) => {
+  await set(`content-${id}`, content);
+};
+
+const loadMetadata = async (): Promise<ExplorerItem[]> => {
+  return (await get('explorer-metadata')) || DEFAULT_ITEMS;
+};
+
+const loadContent = async (id: string): Promise<WorkspaceContent | null> => {
+  return (await get(`content-${id}`)) || null;
+};
+
+const deleteWorkspaceItem = async (id: string) => {
+  await del(`content-${id}`);
+  await del(`file-${id}`); // Previous uploads
+};
+
+const storeFileContent = async (id: string, content: Blob) => {
+  await set(`file-${id}`, content);
+};
+
+const getFileContent = async (id: string): Promise<Blob | null> => {
+  return await get(`file-${id}`);
+};
+
 export default function App() {
-  const [files, setFiles] = useState<FileItem[]>([
-    { id: 'root', name: 'Academic Project', type: 'folder', parentId: null },
-    { id: '1', name: 'Tutorial_Guide.pdf', type: 'pdf', parentId: 'root', content: 'https://raw.githubusercontent.com/mozilla/pdf.js/master/web/compressed.tracemonkey-pldi-09.pdf' }
-  ]);
+  const [items, setItems] = useState<ExplorerItem[]>([]);
+  const [activeMapId, setActiveMapId] = useState<string>(DEFAULT_ITEMS[0].id);
+  const [activeMapData, setActiveMapData] = useState<WorkspaceContent>({ nodes: [], edges: [], paths: [] });
+  const [resolvedPdfUrl, setResolvedPdfUrl] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   
-  const [nodes, setNodes] = useState<WorkspaceNode[]>([]);
-  const [edges, setEdges] = useState<WorkspaceEdge[]>([]);
-  const [paths, setPaths] = useState<PathData[]>([]);
-  const [activePdf, setActivePdf] = useState<FileItem | null>(null);
+  const activeMap = items.find(i => i.id === activeMapId) || items[0] || DEFAULT_ITEMS[0];
+
+  // 1. Initial Metadata Load - Instant
+  useEffect(() => {
+    loadMetadata().then(meta => {
+      setItems(meta);
+      const firstMap = meta.find(i => i.type === 'map');
+      if (firstMap) setActiveMapId(firstMap.id);
+      setIsInitialLoad(false);
+    });
+  }, []);
+
+  // 2. Load Content for Active Map - Lazy
+  useEffect(() => {
+    if (isInitialLoad) return;
+    loadContent(activeMapId).then(data => {
+      if (data) {
+        setActiveMapData(data);
+      } else {
+        setActiveMapData({ nodes: [], edges: [], paths: [] });
+      }
+    });
+  }, [activeMapId, isInitialLoad]);
+
+  // 3. Optimized Auto-save (Incremental)
+  useEffect(() => {
+    if (isInitialLoad) return;
+    setSaveStatus('saving');
+    const timer = setTimeout(async () => {
+      try {
+        await saveMetadata(items);
+        await saveContent(activeMapId, activeMapData);
+        setSaveStatus('saved');
+      } catch (e) {
+        setSaveStatus('error');
+      }
+    }, 1000); // 1s debounce for "Obsidian-like" feel
+    return () => clearTimeout(timer);
+  }, [items, activeMapData, activeMapId, isInitialLoad]);
+
+  // State setters that ONLY modify the active chunk
+  const setNodes = useCallback((update: WorkspaceNode[] | ((nds: WorkspaceNode[]) => WorkspaceNode[])) => {
+    setActiveMapData(prev => ({
+      ...prev,
+      nodes: typeof update === 'function' ? update(prev.nodes || []) : update
+    }));
+  }, []);
+
+  const setEdges = useCallback((update: WorkspaceEdge[] | ((eds: WorkspaceEdge[]) => WorkspaceEdge[])) => {
+    setActiveMapData(prev => ({
+      ...prev,
+      edges: typeof update === 'function' ? update(prev.edges || []) : update
+    }));
+  }, []);
+
+  const setPaths = useCallback((update: PathData[] | ((ps: PathData[]) => PathData[])) => {
+    setActiveMapData(prev => ({
+      ...prev,
+      paths: typeof update === 'function' ? update(prev.paths || []) : update
+    }));
+  }, []);
+
+  // Logic to resolve PDF content on selection
+  const [activePdf, setActivePdf] = useState<ExplorerItem | null>(null);
+
+  useEffect(() => {
+    if (activePdf && activePdf.type === 'pdf') {
+      getFileContent(activePdf.id).then(blob => {
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          setResolvedPdfUrl(url);
+        }
+      });
+    } else {
+      setResolvedPdfUrl(null);
+    }
+  }, [activePdf]);
+
+  useEffect(() => {
+    return () => {
+      if (resolvedPdfUrl && resolvedPdfUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(resolvedPdfUrl);
+      }
+    };
+  }, [resolvedPdfUrl]);
+
+  const onCreateItem = useCallback((type: 'folder' | 'map' | 'pdf' | 'note', parentId: string | null = null) => {
+    const id = uuidv4();
+    const newItem: ExplorerItem = {
+      id,
+      name: type === 'folder' ? 'New Folder' : 
+            type === 'map' ? `Exploration Map` :
+            type === 'note' ? 'Literature Note' : 'Scientific Source',
+      type,
+      parentId,
+      lastModified: new Date().toISOString()
+    };
+    
+    setItems(prev => [...prev, newItem]);
+    
+    // Initialize content for new item
+    const initialContent = type === 'map' ? { nodes: [], edges: [], paths: [] } : { content: '' };
+    saveContent(id, initialContent);
+
+    if (type === 'map') setActiveMapId(id);
+  }, []);
+
+  const onDeleteItem = useCallback((id: string) => {
+    setItems(prev => {
+      const remaining = prev.filter(i => i.id !== id);
+      deleteWorkspaceItem(id);
+      
+      if (id === activeMapId) {
+        const nextMap = remaining.find(i => i.type === 'map');
+        if (nextMap) setActiveMapId(nextMap.id || '');
+      }
+      return remaining;
+    });
+  }, [activeMapId]);
+
+  const onRenameItem = useCallback((id: string, name: string) => {
+    setItems(prev => prev.map(i => i.id === id ? { ...i, name, lastModified: new Date().toISOString() } : i));
+  }, []);
+
+  const onMoveItem = useCallback((id: string, newParentId: string | null) => {
+    setItems(prev => {
+      const findDescendants = (parentId: string): string[] => {
+        const children = prev.filter(i => i.parentId === parentId);
+        return [...children.map(c => c.id), ...children.flatMap(c => findDescendants(c.id))];
+      };
+      if (id === newParentId) return prev;
+      if (newParentId && findDescendants(id).includes(newParentId)) return prev;
+      return prev.map(i => i.id === id ? { ...i, parentId: newParentId, lastModified: new Date().toISOString() } : i);
+    });
+  }, []);
+
+  const exportWorkspace = () => {
+    const data = JSON.stringify({ metadata: items, activeMap: { id: activeMapId, ...activeMapData } }, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `scholar-vault-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importWorkspace = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result as string);
+        if (imported.metadata) {
+          setItems(imported.metadata);
+          // Standard metadata restoration
+          saveMetadata(imported.metadata);
+        }
+      } catch (err) {
+        alert('Invalid vault file');
+      }
+    };
+    reader.readAsText(file);
+  };
 
   // Drawing State
   const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector'>('none');
   const [currentColor, setCurrentColor] = useState('#4f46e5');
-
-  const onDeleteFile = useCallback((id: string) => {
-    setFiles(prev => prev.filter(f => f.id !== id));
-  }, []);
 
   const addNode = useCallback((type: 'idea' | 'note' | 'group') => {
     const id = uuidv4();
@@ -68,26 +289,28 @@ export default function App() {
         type,
         position: { x: Math.random() * 400, y: Math.random() * 400 },
         data: { 
-          label: type === 'idea' ? 'Synthesis Thesis' : 'Critical Annotation...', 
+          label: type === 'idea' ? 'Research Synthesis' : 'New Annotation', 
           type 
         }
       };
     }
     setNodes((nds) => [...nds, newNode]);
-  }, []);
+  }, [setNodes]);
 
-  const onFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && file.type === 'application/pdf') {
-      const url = URL.createObjectURL(file);
-      const newFile: FileItem = {
-        id: uuidv4(),
+      const id = uuidv4();
+      await storeFileContent(id, file);
+      const newItem: ExplorerItem = {
+        id,
         name: file.name,
         type: 'pdf',
-        parentId: 'root',
-        content: url
+        parentId: null,
+        content: id, // Store ID instead of blob URL
+        lastModified: new Date().toISOString()
       };
-      setFiles(prev => [...prev, newFile]);
+      setItems(prev => [...prev, newItem]);
     }
   };
 
@@ -95,9 +318,16 @@ export default function App() {
     <div className="flex h-screen w-full bg-[#FAF9F6] font-sans text-slate-800 overflow-hidden select-none">
       {/* Sidebar - Integrated & Minimal */}
       <Sidebar 
-        files={files} 
-        onSelectFile={(f) => f.type === 'pdf' ? setActivePdf(f) : null}
-        onDeleteFile={onDeleteFile}
+        items={items}
+        activeMapId={activeMapId}
+        onSelectItem={(i) => {
+          if (i.type === 'map') setActiveMapId(i.id);
+          else if (i.type === 'pdf') setActivePdf(i);
+        }}
+        onDeleteItem={onDeleteItem}
+        onRenameItem={onRenameItem}
+        onMoveItem={onMoveItem}
+        onCreateItem={onCreateItem}
         onUpload={() => document.getElementById('pdf-upload')?.click()}
       />
       <input id="pdf-upload" type="file" accept=".pdf" className="hidden" onChange={onFileUpload} />
@@ -111,8 +341,17 @@ export default function App() {
                <Layers className="text-slate-900" size={20} />
             </div>
             <div>
-              <h1 className="font-bold text-sm tracking-tight text-slate-900 leading-none">Scholar Map</h1>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Aesthetic Workspace</span>
+              <h1 className="font-bold text-sm tracking-tight text-slate-900 leading-none">{activeMap?.name}</h1>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest leading-none">Scholar Vault</span>
+                <span className="text-[9px] text-slate-300">•</span>
+                <div className="flex items-center gap-1.5 min-w-[70px]">
+                  <div className={`w-1 h-1 rounded-full ${saveStatus === 'saving' ? 'bg-amber-400 animate-pulse' : saveStatus === 'saved' ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
+                  <span className={`text-[9px] font-bold uppercase tracking-tighter ${saveStatus === 'saving' ? 'text-amber-500' : 'text-slate-400'}`}>
+                    {saveStatus === 'saving' ? 'Writing...' : saveStatus === 'saved' ? 'Vault Synced' : 'Sync Error'}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -185,31 +424,66 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex items-center gap-4">
-             <button className="text-[11px] font-bold uppercase tracking-widest text-slate-400 hover:text-slate-900 transition-colors">Export Map</button>
-             <div className="w-8 h-8 rounded-full bg-slate-200 overflow-hidden ring-1 ring-slate-300"></div>
+          <div className="flex items-center gap-2 bg-slate-100/50 border border-slate-200 rounded-full p-1 px-1.5">
+            <button 
+              onClick={exportWorkspace}
+              className="p-2 hover:bg-white hover:shadow-sm rounded-full transition-all text-slate-600"
+              title="Export Workspace"
+            >
+               <Download size={18} />
+            </button>
+            <button 
+              onClick={() => document.getElementById('workspace-import')?.click()}
+              className="p-2 hover:bg-white hover:shadow-sm rounded-full transition-all text-slate-600"
+              title="Import Workspace"
+            >
+               <Upload size={18} />
+            </button>
+            <input 
+              id="workspace-import" 
+              type="file" 
+              accept=".json" 
+              className="hidden" 
+              onChange={importWorkspace} 
+            />
           </div>
+          <div className="w-8 h-8 rounded-full bg-slate-200 overflow-hidden ring-1 ring-slate-300 ml-2"></div>
         </header>
 
         {/* Canvas Area */}
         <div className="flex-1 relative bg-[#FAF9F6]">
-          <InfiniteCanvas 
-            nodes={nodes} 
-            edges={edges} 
-            setNodes={setNodes} 
-            setEdges={setEdges} 
-            paths={paths}
-            setPaths={setPaths}
-            drawingTool={drawingTool}
-            currentColor={currentColor}
-          />
+          {isInitialLoad ? (
+             <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm z-50">
+                <div className="flex flex-col items-center gap-4">
+                  <div className="w-12 h-12 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-indigo-600">Mounting Filesystem</span>
+                </div>
+             </div>
+          ) : (
+            <InfiniteCanvas 
+              nodes={activeMapData.nodes || []} 
+              edges={activeMapData.edges || []} 
+              setNodes={setNodes} 
+              setEdges={setEdges} 
+              paths={activeMapData.paths || []}
+              setPaths={setPaths}
+              drawingTool={drawingTool}
+              currentColor={currentColor}
+            />
+          )}
         </div>
       </main>
 
       {/* PDF Clipping Engine */}
-      {activePdf && (
+      {activePdf && resolvedPdfUrl && (
         <PDFViewerModal 
-          file={activePdf} 
+          file={{ 
+            id: activePdf.id, 
+            name: activePdf.name, 
+            type: 'pdf', 
+            parentId: activePdf.parentId, 
+            content: resolvedPdfUrl 
+          }} 
           onClose={() => setActivePdf(null)}
           onClip={(clip) => {
             setNodes((nds) => [...nds, {

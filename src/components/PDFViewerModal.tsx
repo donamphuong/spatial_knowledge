@@ -3,13 +3,18 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import { X, Scissors, Check, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, MousePointer2 } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-import { FileItem } from '../types';
 
 // Set up the worker
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 interface PDFViewerModalProps {
-  file: FileItem;
+  file: {
+    id: string;
+    name: string;
+    type: 'pdf';
+    parentId: string | null;
+    content?: string;
+  };
   onClose: () => void;
   onClip: (clip: { imageUrl: string; text?: string }) => void;
 }
@@ -125,7 +130,57 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
     );
 
     const imageUrl = cropCanvas.toDataURL('image/png');
-    onClip({ imageUrl, text: `Extracted from page ${pageNumber}` });
+    
+    // TEXT EXTRACTION LOGIC
+    // We inspect the rendered text layer spans to find what falls within selection
+    let extractedText = "";
+    if (containerRef.current) {
+      const textLayer = containerRef.current.querySelector('.react-pdf__Page__textContent');
+      if (textLayer) {
+        const textItems = Array.from(textLayer.querySelectorAll('span')) as HTMLElement[];
+        const containerRect = containerRef.current.getBoundingClientRect();
+        
+        // Selection relative to viewport
+        const selLeft = selection.x + containerRect.left;
+        const selTop = selection.y + containerRect.top;
+        const selRight = selLeft + selection.w;
+        const selBottom = selTop + selection.h;
+
+        // Group items into lines to preserve roughly correct layout
+        const lineMap = new Map<number, { el: HTMLElement, rect: DOMRect }[]>();
+        
+        textItems.forEach(item => {
+          const rect = item.getBoundingClientRect();
+          // Check intersection
+          const isIntersecting = !(
+            rect.right < selLeft || 
+            rect.left > selRight || 
+            rect.bottom < selTop || 
+            rect.top > selBottom
+          );
+
+          if (isIntersecting) {
+            const y = Math.round(rect.top / 5) * 5; // Bucket by vertical position
+            if (!lineMap.has(y)) lineMap.set(y, []);
+            lineMap.get(y)?.push({ el: item, rect });
+          }
+        });
+
+        // Sort lines vertically, then items horizontally within lines
+        const sortedLines = Array.from(lineMap.keys()).sort((a, b) => a - b);
+        extractedText = sortedLines.map(y => {
+          const items = lineMap.get(y) || [];
+          return items.sort((a, b) => a.rect.left - b.rect.left)
+                      .map(i => i.el.innerText)
+                      .join(' ');
+        }).join('\n');
+      }
+    }
+
+    onClip({ 
+      imageUrl, 
+      text: extractedText.trim() || `Annotation from page ${pageNumber}` 
+    });
     
     setSelection(null);
     setIsClipping(false);
@@ -213,7 +268,7 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
                 pageNumber={pageNumber} 
                 scale={scale}
                 renderAnnotationLayer={false}
-                renderTextLayer={false}
+                renderTextLayer={true}
               />
             </Document>
 

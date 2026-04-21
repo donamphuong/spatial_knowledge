@@ -2,46 +2,111 @@ import React, { useState } from 'react';
 import { 
   Folder, 
   FileText, 
-  File, 
   Plus, 
+  FolderPlus,
   ChevronRight, 
   ChevronDown,
   Upload,
   Search,
-  BookOpen,
-  Layers,
-  Trash2
+  Trash2,
+  Map as MapIcon,
+  StickyNote
 } from 'lucide-react';
-import { FileItem } from '../types';
+import { ExplorerItem } from '../types';
+import { 
+  DndContext, 
+  useDraggable, 
+  useDroppable, 
+  DragEndEvent,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  PointerSensor
+} from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
 
 interface SidebarProps {
-  files: FileItem[];
-  onSelectFile: (file: FileItem) => void;
-  onDeleteFile: (id: string) => void;
+  items: ExplorerItem[];
+  activeMapId: string;
+  onSelectItem: (item: ExplorerItem) => void;
+  onDeleteItem: (id: string) => void;
+  onRenameItem: (id: string, name: string) => void;
+  onMoveItem: (id: string, newParentId: string | null) => void;
+  onCreateItem: (type: 'folder' | 'map' | 'pdf' | 'note', parentId: string | null) => void;
   onUpload: () => void;
 }
 
-interface FileTreeItemProps {
+interface ExplorerTreeItemProps {
   key?: string | number;
-  item: FileItem;
-  files: FileItem[];
-  onSelectFile: (file: FileItem) => void;
-  onDeleteFile: (id: string) => void;
+  item: ExplorerItem;
+  items: ExplorerItem[];
+  activeMapId: string;
+  onSelectItem: (item: ExplorerItem) => void;
+  onDeleteItem: (id: string) => void;
+  onRenameItem: (id: string, name: string) => void;
+  onCreateItem: (type: 'folder' | 'map' | 'pdf' | 'note', parentId: string | null) => void;
   depth?: number;
 }
 
-const FileTreeItem = ({ item, files, onSelectFile, onDeleteFile, depth = 0 }: FileTreeItemProps) => {
+const ExplorerTreeItem = ({ 
+  item, 
+  items, 
+  activeMapId, 
+  onSelectItem, 
+  onDeleteItem, 
+  onRenameItem, 
+  onCreateItem, 
+  depth = 0 
+}: ExplorerTreeItemProps) => {
   const [isOpen, setIsOpen] = useState(true);
-  const children = files.filter(f => f.parentId === item.id);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const children = items.filter(i => i.parentId === item.id);
   const isFolder = item.type === 'folder';
+  const isActive = item.type === 'map' && activeMapId === item.id;
+
+  const { attributes, listeners, setNodeRef: setDraggableRef, transform, isDragging } = useDraggable({
+    id: item.id,
+    data: item
+  });
+
+  const { setNodeRef: setDroppableRef, isOver } = useDroppable({
+    id: `drop-${item.id}`,
+    disabled: !isFolder,
+    data: { id: item.id }
+  });
+
+  const style = transform ? {
+    transform: CSS.Translate.toString(transform),
+    zIndex: isDragging ? 50 : undefined,
+    opacity: isDragging ? 0.5 : 1,
+  } : undefined;
+
+  const getIcon = () => {
+    switch (item.type) {
+      case 'folder': return <Folder size={16} fill="currentColor" className="opacity-20 translate-y-[1px]" />;
+      case 'map': return <MapIcon size={16} className={isActive ? 'text-indigo-600' : ''} />;
+      case 'note': return <StickyNote size={16} />;
+      case 'pdf': return <FileText size={16} />;
+      default: return <FileText size={16} />;
+    }
+  };
 
   return (
-    <div>
+    <div ref={setDroppableRef} className={`${isOver ? 'bg-indigo-50/50 rounded-md ring-2 ring-indigo-200 ring-inset' : ''}`}>
       <div 
-        className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-50 rounded-md transition-all group ${depth > 0 ? 'ml-3' : ''} text-slate-600`}
+        ref={setDraggableRef}
+        style={style}
+        {...attributes}
+        {...listeners}
+        className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-50 rounded-md transition-all group ${depth > 0 ? 'ml-3' : ''} ${isActive ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600'}`}
         onClick={() => {
           if (isFolder) setIsOpen(!isOpen);
-          onSelectFile(item);
+          onSelectItem(item);
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setIsRenaming(true);
         }}
       >
         <span className="text-slate-400">
@@ -51,66 +116,174 @@ const FileTreeItem = ({ item, files, onSelectFile, onDeleteFile, depth = 0 }: Fi
             <div className="w-[14px]" />
           )}
         </span>
-        <span className="text-slate-400 group-hover:text-indigo-500 transition-colors">
-          {isFolder ? <Folder size={16} fill="currentColor" className="opacity-20" /> : <BookOpen size={16} />}
-        </span>
-        <span className="text-sm font-medium truncate flex-1 group-hover:text-slate-900 focus-within:text-slate-900 leading-none">
-          {item.name}
+        <span className={`${isActive ? 'text-indigo-600' : 'text-slate-400 group-hover:text-indigo-500'} transition-colors`}>
+          {getIcon()}
         </span>
         
-        {item.id !== 'root' && (
+        {isRenaming ? (
+          <input 
+            autoFocus
+            defaultValue={item.name}
+            onBlur={(e) => {
+              onRenameItem(item.id, e.target.value);
+              setIsRenaming(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                onRenameItem(item.id, e.currentTarget.value);
+                setIsRenaming(false);
+              }
+            }}
+            className="text-sm font-medium bg-white border border-indigo-200 rounded px-1 w-full outline-none ring-1 ring-indigo-300"
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="text-xs font-medium truncate flex-1 group-hover:text-slate-900 leading-none">
+            {item.name}
+          </span>
+        )}
+        
+        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+          {isFolder && (
+            <>
+               <button 
+                onClick={(e) => { e.stopPropagation(); onCreateItem('map', item.id); }}
+                className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-600 transition-all"
+                title="Add Map"
+              >
+                <MapIcon size={12} />
+              </button>
+              <button 
+                onClick={(e) => { e.stopPropagation(); onCreateItem('folder', item.id); }}
+                className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-600 transition-all"
+                title="Add Sub-folder"
+              >
+                <FolderPlus size={12} />
+              </button>
+            </>
+          )}
+
           <button 
             onClick={(e) => {
               e.stopPropagation();
-              onDeleteFile(item.id);
+              onDeleteItem(item.id);
             }}
-            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 hover:text-red-500 rounded transition-all transition-opacity"
-            title="Delete File"
+            className="p-1 hover:bg-red-50 hover:text-red-500 rounded transition-all"
+            title="Delete"
           >
             <Trash2 size={12} />
           </button>
-        )}
+        </div>
       </div>
       
       {isFolder && isOpen && children.map(child => (
-        <FileTreeItem key={child.id} item={child} files={files} onSelectFile={onSelectFile} onDeleteFile={onDeleteFile} depth={depth + 1} />
+        <ExplorerTreeItem 
+          key={child.id} 
+          item={child} 
+          items={items} 
+          activeMapId={activeMapId}
+          onSelectItem={onSelectItem} 
+          onDeleteItem={onDeleteItem} 
+          onRenameItem={onRenameItem}
+          onCreateItem={onCreateItem}
+          depth={depth + 1} 
+        />
       ))}
     </div>
   );
 };
 
-export default function Sidebar({ files, onSelectFile, onDeleteFile, onUpload }: SidebarProps) {
-  const rootFiles = files.filter(f => !f.parentId);
+export default function Sidebar({ 
+  items, 
+  activeMapId, 
+  onSelectItem, 
+  onDeleteItem, 
+  onRenameItem,
+  onMoveItem,
+  onCreateItem,
+  onUpload
+}: SidebarProps) {
+  const rootItems = items.filter(i => !i.parentId);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    }),
+    useSensor(MouseSensor),
+    useSensor(TouchSensor)
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const activeId = active.id as string;
+      const overId = (over.id as string).replace('drop-', '');
+      onMoveItem(activeId, overId);
+    } else if (!over && active.id) {
+       // Support dragging to the root if dropped over empty space in explorer? 
+       // For now, only drop on folders.
+    }
+  };
 
   return (
     <aside className="w-64 border-r border-slate-200 bg-white flex flex-col shrink-0 z-10 shadow-sm">
-      <div className="p-5 pb-4 flex flex-col gap-4">
-        <div className="flex items-center gap-2">
-          <div className="w-5 h-5 bg-indigo-600 rounded-sm flex items-center justify-center p-1">
-             <div className="w-full h-full bg-white opacity-80"></div>
+      <div className="p-5 pb-2 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 bg-indigo-600 rounded-sm flex items-center justify-center p-1">
+               <div className="w-full h-full bg-white opacity-80"></div>
+            </div>
+            <span className="font-bold text-sm tracking-tight text-slate-900 uppercase">Library</span>
           </div>
-          <span className="font-bold text-sm tracking-tight text-slate-900 uppercase">Library</span>
+          <div className="flex items-center gap-1">
+             <button 
+              onClick={() => onCreateItem('folder', null)}
+              className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-600 transition-all"
+              title="New Folder"
+            >
+              <FolderPlus size={16} />
+            </button>
+            <button 
+              onClick={() => onCreateItem('map', null)}
+              className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-600 transition-all font-bold"
+              title="New Map"
+            >
+              <MapIcon size={16} />
+            </button>
+          </div>
         </div>
-        
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+      </div>
+
+      <div className="px-3 pt-4">
+        <div className="relative mx-2 mb-2">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
           <input 
             type="text" 
-            placeholder="Search files..." 
-            className="w-full bg-slate-50 border border-slate-100 rounded-md py-1.5 pl-9 pr-4 text-[11px] focus:outline-none focus:border-indigo-500 focus:bg-white transition-all"
+            placeholder="Search library..." 
+            className="w-full bg-slate-50 border border-slate-100 rounded-md py-1.5 pl-8 pr-4 text-[10px] focus:outline-none focus:border-indigo-500 focus:bg-white transition-all text-slate-600"
           />
         </div>
+        <div className="text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-3 ml-2">Explorer</div>
       </div>
 
-      <div className="px-3 pt-2">
-        <div className="text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-3 ml-2">Research Explorer</div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-3 custom-scrollbar">
-        {rootFiles.map(file => (
-          <FileTreeItem key={file.id} item={file} files={files} onSelectFile={onSelectFile} onDeleteFile={onDeleteFile} />
-        ))}
-      </div>
+      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <div className="flex-1 overflow-y-auto px-3 custom-scrollbar">
+          {rootItems.map(item => (
+            <ExplorerTreeItem 
+              key={item.id} 
+              item={item} 
+              items={items} 
+              activeMapId={activeMapId}
+              onSelectItem={onSelectItem} 
+              onDeleteItem={onDeleteItem} 
+              onRenameItem={onRenameItem}
+              onCreateItem={onCreateItem}
+            />
+          ))}
+        </div>
+      </DndContext>
 
       <div className="p-4 border-t border-slate-100 bg-slate-50">
         <button 
