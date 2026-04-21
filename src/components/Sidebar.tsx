@@ -10,7 +10,10 @@ import {
   Search,
   Trash2,
   Map as MapIcon,
-  StickyNote
+  StickyNote,
+  HardDrive,
+  Link,
+  Settings
 } from 'lucide-react';
 import { ExplorerItem } from '../types';
 import { 
@@ -29,6 +32,8 @@ import { CSS } from '@dnd-kit/utilities';
 interface SidebarProps {
   items: ExplorerItem[];
   activeMapId: string;
+  vaultName: string | null;
+  onConnectFolder: () => void;
   onSelectItem: (item: ExplorerItem) => void;
   onDeleteItem: (id: string) => void;
   onRenameItem: (id: string, name: string) => void;
@@ -196,6 +201,8 @@ const ExplorerTreeItem = ({
 export default function Sidebar({ 
   items, 
   activeMapId, 
+  vaultName,
+  onConnectFolder,
   onSelectItem, 
   onDeleteItem, 
   onRenameItem,
@@ -221,14 +228,36 @@ export default function Sidebar({
       const activeId = active.id as string;
       const overId = (over.id as string).replace('drop-', '');
       onMoveItem(activeId, overId);
-    } else if (!over && active.id) {
-       // Support dragging to the root if dropped over empty space in explorer? 
-       // For now, only drop on folders.
     }
   };
 
   return (
     <aside className="w-64 border-r border-slate-200 bg-white flex flex-col shrink-0 z-10 shadow-sm">
+      <div className="p-4 border-b border-slate-100 flex flex-col gap-3">
+        <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1">
+          <span>Local Vault</span>
+          {vaultName ? <HardDrive size={10} className="text-emerald-500" /> : <Link size={10} />}
+        </div>
+        
+        <button 
+          onClick={onConnectFolder}
+          className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all text-left group ${vaultName ? 'border-emerald-100 bg-emerald-50/30' : 'border-slate-200 border-dashed hover:border-indigo-400 hover:bg-slate-50'}`}
+        >
+          <div className={`p-1.5 rounded-md ${vaultName ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400 group-hover:text-indigo-600 group-hover:bg-indigo-50'}`}>
+            <HardDrive size={14} />
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <div className={`text-[11px] font-bold truncate ${vaultName ? 'text-emerald-800' : 'text-slate-500 group-hover:text-indigo-700'}`}>
+              {vaultName || 'Connect Root Folder'}
+            </div>
+            <div className="text-[9px] text-slate-400 font-medium">
+              {vaultName ? 'Synced to Disk' : 'Private Storage Only'}
+            </div>
+          </div>
+          <ChevronRight size={12} className="text-slate-300" />
+        </button>
+      </div>
+
       <div className="p-5 pb-2 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">

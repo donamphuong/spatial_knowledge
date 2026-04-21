@@ -60,16 +60,46 @@ interface WorkspaceContent {
   content?: string;
 }
 
-const saveMetadata = async (items: ExplorerItem[]) => {
+// File system helper types
+declare global {
+  interface Window {
+    showDirectoryPicker: (options?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
+  }
+}
+
+const saveMetadata = async (items: ExplorerItem[], directoryHandle?: FileSystemDirectoryHandle | null) => {
   // Strip content before saving metadata to keep the index tiny and fast
   const metadata = items.map(({ id, name, type, parentId, lastModified }) => ({
     id, name, type, parentId, lastModified
   }));
   await set('explorer-metadata', metadata);
+
+  if (directoryHandle) {
+    try {
+      const fileHandle = await directoryHandle.getFileHandle('vault-metadata.json', { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(JSON.stringify(metadata, null, 2));
+      await writable.close();
+    } catch (e) {
+      console.error('Failed to sync metadata to filesystem', e);
+    }
+  }
 };
 
-const saveContent = async (id: string, content: WorkspaceContent) => {
+const saveContent = async (id: string, content: WorkspaceContent, directoryHandle?: FileSystemDirectoryHandle | null) => {
   await set(`content-${id}`, content);
+
+  if (directoryHandle) {
+    try {
+      const mapsDir = await directoryHandle.getDirectoryHandle('maps', { create: true });
+      const fileHandle = await mapsDir.getFileHandle(`${id}.scholar`, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(JSON.stringify(content, null, 2));
+      await writable.close();
+    } catch (e) {
+      console.error('Failed to sync content to filesystem', e);
+    }
+  }
 };
 
 const loadMetadata = async (): Promise<ExplorerItem[]> => {
@@ -80,17 +110,53 @@ const loadContent = async (id: string): Promise<WorkspaceContent | null> => {
   return (await get(`content-${id}`)) || null;
 };
 
-const deleteWorkspaceItem = async (id: string) => {
+const deleteWorkspaceItem = async (id: string, directoryHandle?: FileSystemDirectoryHandle | null) => {
   await del(`content-${id}`);
   await del(`file-${id}`); // Previous uploads
+
+  if (directoryHandle) {
+    try {
+      const mapsDir = await directoryHandle.getDirectoryHandle('maps', { create: true });
+      await mapsDir.removeEntry(`${id}.scholar`).catch(() => {});
+    } catch (e) {
+      console.error('Failed to delete from filesystem', e);
+    }
+  }
 };
 
-const storeFileContent = async (id: string, content: Blob) => {
+const storeFileContent = async (id: string, content: Blob, directoryHandle?: FileSystemDirectoryHandle | null) => {
   await set(`file-${id}`, content);
+
+  if (directoryHandle) {
+    try {
+      const attachmentsDir = await directoryHandle.getDirectoryHandle('attachments', { create: true });
+      const fileHandle = await attachmentsDir.getFileHandle(`${id}.pdf`, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+    } catch (e) {
+      console.error('Failed to sync file to filesystem', e);
+    }
+  }
 };
 
-const getFileContent = async (id: string): Promise<Blob | null> => {
-  return await get(`file-${id}`);
+const getFileContent = async (id: string, directoryHandle?: FileSystemDirectoryHandle | null): Promise<Blob | null> => {
+  const cached = await get(`file-${id}`);
+  if (cached) return cached;
+
+  if (directoryHandle) {
+    try {
+      const attachmentsDir = await directoryHandle.getDirectoryHandle('attachments', { create: true });
+      const fileHandle = await attachmentsDir.getFileHandle(`${id}.pdf`);
+      const file = await fileHandle.getFile();
+      // Cache it back to IDB for faster subsequent access
+      await set(`file-${id}`, file);
+      return file;
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
 };
 
 export default function App() {
@@ -100,18 +166,61 @@ export default function App() {
   const [resolvedPdfUrl, setResolvedPdfUrl] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [directoryHandle, setDirectoryHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [vaultName, setVaultName] = useState<string | null>(null);
   
   const activeMap = items.find(i => i.id === activeMapId) || items[0] || DEFAULT_ITEMS[0];
 
-  // 1. Initial Metadata Load - Instant
+  // 1. Initial Metadata & Handle Load
   useEffect(() => {
-    loadMetadata().then(meta => {
+    const init = async () => {
+      const meta = await loadMetadata();
       setItems(meta);
       const firstMap = meta.find(i => i.type === 'map');
       if (firstMap) setActiveMapId(firstMap.id);
+
+      // Restore directory handle if it exists in IDB
+      const handle = await get('vault-directory-handle');
+      if (handle) {
+        setDirectoryHandle(handle);
+        setVaultName(handle.name);
+      }
       setIsInitialLoad(false);
-    });
+    };
+    init();
   }, []);
+
+  // Sync directory selection to IDB
+  useEffect(() => {
+    if (directoryHandle) {
+      set('vault-directory-handle', directoryHandle);
+      setVaultName(directoryHandle.name);
+    }
+  }, [directoryHandle]);
+
+  const connectFolder = async () => {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      setDirectoryHandle(handle);
+      
+      // Optionally load items FROM the vault if it already has meta
+      try {
+        const fileHandle = await handle.getFileHandle('vault-metadata.json');
+        const file = await fileHandle.getFile();
+        const text = await file.text();
+        const meta = JSON.parse(text);
+        if (Array.isArray(meta)) {
+          setItems(meta);
+          const firstMap = meta.find(i => i.type === 'map');
+          if (firstMap) setActiveMapId(firstMap.id);
+        }
+      } catch (e) {
+        // No existing vault metadata, that's fine
+      }
+    } catch (e) {
+      console.error('Directory picker cancelled or failed', e);
+    }
+  };
 
   // 2. Load Content for Active Map - Lazy
   useEffect(() => {
@@ -131,15 +240,15 @@ export default function App() {
     setSaveStatus('saving');
     const timer = setTimeout(async () => {
       try {
-        await saveMetadata(items);
-        await saveContent(activeMapId, activeMapData);
+        await saveMetadata(items, directoryHandle);
+        await saveContent(activeMapId, activeMapData, directoryHandle);
         setSaveStatus('saved');
       } catch (e) {
         setSaveStatus('error');
       }
     }, 1000); // 1s debounce for "Obsidian-like" feel
     return () => clearTimeout(timer);
-  }, [items, activeMapData, activeMapId, isInitialLoad]);
+  }, [items, activeMapData, activeMapId, isInitialLoad, directoryHandle]);
 
   // State setters that ONLY modify the active chunk
   const setNodes = useCallback((update: WorkspaceNode[] | ((nds: WorkspaceNode[]) => WorkspaceNode[])) => {
@@ -168,7 +277,7 @@ export default function App() {
 
   useEffect(() => {
     if (activePdf && activePdf.type === 'pdf') {
-      getFileContent(activePdf.id).then(blob => {
+      getFileContent(activePdf.id, directoryHandle).then(blob => {
         if (blob) {
           const url = URL.createObjectURL(blob);
           setResolvedPdfUrl(url);
@@ -177,7 +286,7 @@ export default function App() {
     } else {
       setResolvedPdfUrl(null);
     }
-  }, [activePdf]);
+  }, [activePdf, directoryHandle]);
 
   useEffect(() => {
     return () => {
@@ -203,15 +312,15 @@ export default function App() {
     
     // Initialize content for new item
     const initialContent = type === 'map' ? { nodes: [], edges: [], paths: [] } : { content: '' };
-    saveContent(id, initialContent);
+    saveContent(id, initialContent, directoryHandle);
 
     if (type === 'map') setActiveMapId(id);
-  }, []);
+  }, [directoryHandle]);
 
   const onDeleteItem = useCallback((id: string) => {
     setItems(prev => {
       const remaining = prev.filter(i => i.id !== id);
-      deleteWorkspaceItem(id);
+      deleteWorkspaceItem(id, directoryHandle);
       
       if (id === activeMapId) {
         const nextMap = remaining.find(i => i.type === 'map');
@@ -219,7 +328,7 @@ export default function App() {
       }
       return remaining;
     });
-  }, [activeMapId]);
+  }, [activeMapId, directoryHandle]);
 
   const onRenameItem = useCallback((id: string, name: string) => {
     setItems(prev => prev.map(i => i.id === id ? { ...i, name, lastModified: new Date().toISOString() } : i));
@@ -301,13 +410,12 @@ export default function App() {
     const file = e.target.files?.[0];
     if (file && file.type === 'application/pdf') {
       const id = uuidv4();
-      await storeFileContent(id, file);
+      await storeFileContent(id, file, directoryHandle);
       const newItem: ExplorerItem = {
         id,
         name: file.name,
         type: 'pdf',
         parentId: null,
-        content: id, // Store ID instead of blob URL
         lastModified: new Date().toISOString()
       };
       setItems(prev => [...prev, newItem]);
@@ -316,10 +424,11 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full bg-[#FAF9F6] font-sans text-slate-800 overflow-hidden select-none">
-      {/* Sidebar - Integrated & Minimal */}
       <Sidebar 
         items={items}
         activeMapId={activeMapId}
+        vaultName={vaultName}
+        onConnectFolder={connectFolder}
         onSelectItem={(i) => {
           if (i.type === 'map') setActiveMapId(i.id);
           else if (i.type === 'pdf') setActivePdf(i);
