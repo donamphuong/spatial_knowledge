@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import { X, Scissors, Check, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, MousePointer2 } from 'lucide-react';
+import { X, Scissors, Check, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, MousePointer2, PanelLeftClose, PanelLeftOpen, Layout, Plus } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -16,7 +16,13 @@ interface PDFViewerModalProps {
     content?: string;
   };
   onClose: () => void;
-  onClip: (clip: { imageUrl: string; text?: string }) => void;
+  onClip: (clip: { 
+    imageUrl?: string; 
+    text?: string; 
+    type: 'pdf-clip' | 'pdf-page' | 'pdf-section';
+    pages?: { imageUrl: string; label: string; aspectRatio: number }[];
+    aspectRatio?: number;
+  }) => void;
 }
 
 export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModalProps) {
@@ -24,6 +30,9 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
   const [pageNumber, setPageNumber] = useState<number>(1);
   const [scale, setScale] = useState<number>(1.2);
   const [isClipping, setIsClipping] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
 
   // Auto-scale to fit height on load
   useEffect(() => {
@@ -96,7 +105,7 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
 
   const captureClip = useCallback(() => {
     if (!selection || !containerRef.current) return;
-
+    
     // Find the canvas rendered by react-pdf inside our container
     const pdfCanvas = containerRef.current.querySelector('canvas');
     if (!pdfCanvas) return;
@@ -179,12 +188,59 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
 
     onClip({ 
       imageUrl, 
-      text: extractedText.trim() || `Annotation from page ${pageNumber}` 
+      text: extractedText.trim() || `Annotation from page ${pageNumber}`,
+      type: 'pdf-clip'
     });
     
     setSelection(null);
     setIsClipping(false);
   }, [selection, pageNumber, onClip]);
+
+  const togglePageSelection = (pageNum: number) => {
+    setSelectedPages(prev => {
+      const next = new Set(prev);
+      if (next.has(pageNum)) next.delete(pageNum);
+      else next.add(pageNum);
+      return next;
+    });
+  };
+
+  const exportSection = useCallback(() => {
+    if (selectedPages.size === 0) return;
+
+    const pages = Array.from(selectedPages).sort((a: number, b: number) => a - b).map(pageNum => {
+      const thumbContainer = document.getElementById(`thumb-container-${pageNum}`);
+      const thumbCanvas = thumbContainer?.querySelector('canvas') as HTMLCanvasElement;
+      return {
+        imageUrl: thumbCanvas?.toDataURL('image/png') || '',
+        label: `Page ${pageNum} from ${file.name}`,
+        aspectRatio: thumbCanvas ? thumbCanvas.width / thumbCanvas.height : 1
+      };
+    }).filter(p => p.imageUrl);
+
+    onClip({
+      type: 'pdf-section',
+      pages,
+      text: `${file.name} - Section (${pages.length} pages)`
+    });
+
+    setSelectedPages(new Set());
+    setIsMultiSelectMode(false);
+  }, [selectedPages, file.name, onClip]);
+
+  const mapPage = useCallback((pageNum: number) => {
+    const thumbContainer = document.getElementById(`thumb-container-${pageNum}`);
+    const thumbCanvas = thumbContainer?.querySelector('canvas') as HTMLCanvasElement;
+    if (!thumbCanvas) return;
+
+    const imageUrl = thumbCanvas.toDataURL('image/png');
+    onClip({ 
+      imageUrl, 
+      text: `Page ${pageNum} from ${file.name}`,
+      type: 'pdf-page',
+      aspectRatio: thumbCanvas.width / thumbCanvas.height
+    });
+  }, [file.name, onClip]);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-slate-900/40 backdrop-blur-md">
@@ -192,7 +248,15 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
         {/* Modal Header */}
         <header className="px-6 h-14 border-b border-slate-200 flex items-center justify-between shrink-0 bg-slate-100/80">
           <div className="flex items-center gap-4">
-            <h2 className="font-bold text-[11px] uppercase tracking-[0.2em] text-slate-500 truncate max-w-[300px]">Document Viewer: {file.name}</h2>
+            <button 
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className={`p-2 rounded-lg transition-all ${isSidebarOpen ? 'bg-slate-200 text-slate-700' : 'text-slate-400 hover:bg-slate-100'}`}
+              title="Toggle Overview"
+            >
+              {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+            </button>
+            <div className="h-4 w-[1px] bg-slate-300 mx-1" />
+            <h2 className="font-bold text-[11px] uppercase tracking-[0.2em] text-slate-500 truncate max-w-[250px]">Document Viewer: {file.name}</h2>
             <div className="h-4 w-[1px] bg-slate-300" />
             <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-md p-0.5 shadow-sm">
               <button 
@@ -245,10 +309,98 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
           </div>
         </header>
 
-        {/* PDF Content */}
-        <div className="flex-1 overflow-auto bg-slate-200 p-12 flex justify-center custom-scrollbar">
-          <div 
-            ref={containerRef}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Sidebar Overview */}
+          {isSidebarOpen && (
+            <aside className="w-48 border-r border-slate-200 bg-[#f5f5f5] overflow-y-auto custom-scrollbar flex flex-col p-4 gap-6 animate-in slide-in-from-left duration-300">
+              <div className="flex items-center justify-between sticky top-0 bg-[#f5f5f5] z-20 pb-2 mb-2 border-b border-slate-200/50">
+                 <div className="flex items-center gap-2">
+                    <Layout size={10} className="text-slate-400" />
+                    <span className="text-[9px] font-sans font-semibold uppercase tracking-wider text-slate-500">Thumbnails</span>
+                 </div>
+                 <button 
+                    onClick={() => setIsMultiSelectMode(!isMultiSelectMode)}
+                    className={`text-[9px] font-sans font-bold uppercase tracking-widest px-2 py-0.5 rounded transition-all ${isMultiSelectMode ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200'}`}
+                 >
+                    {isMultiSelectMode ? 'Done' : 'Select'}
+                 </button>
+              </div>
+
+              {isMultiSelectMode && (
+                <button 
+                  onClick={exportSection}
+                  disabled={selectedPages.size === 0}
+                  className="bg-indigo-600 text-white py-1.5 px-3 rounded text-[9px] font-bold uppercase tracking-widest shadow-sm hover:bg-indigo-700 transition-all mb-4 flex items-center justify-center gap-2 disabled:opacity-30 disabled:grayscale"
+                >
+                  <Plus size={12} />
+                  Export {selectedPages.size}
+                </button>
+              )}
+
+              <Document
+                file={file.content}
+                onLoadSuccess={onDocumentLoadSuccess}
+                loading={null}
+              >
+                <div className="flex flex-col items-center gap-8">
+                  {Array.from(new Array(numPages), (el, index) => {
+                    const pageIdx = index + 1;
+                    const isSelected = selectedPages.has(pageIdx);
+                    const isActive = pageNumber === pageIdx;
+                    return (
+                      <div 
+                        key={`thumb_${pageIdx}`}
+                        id={`thumb-container-${pageIdx}`}
+                        onClick={() => isMultiSelectMode ? togglePageSelection(pageIdx) : setPageNumber(pageIdx)}
+                        className="flex flex-col items-center gap-2 group w-full cursor-pointer relative"
+                      >
+                        <div className={`relative transition-all bg-white shadow-sm ring-1 ring-black/5 ${isActive ? 'ring-2 ring-indigo-500 shadow-indigo-100' : isSelected ? 'ring-2 ring-indigo-400 shadow-indigo-50' : 'hover:ring-black/10'}`}>
+                          <Page 
+                            pageNumber={pageIdx} 
+                            width={120}
+                            className="bg-white"
+                            renderAnnotationLayer={false}
+                            renderTextLayer={false}
+                          />
+                          
+                          {/* Selection Badge */}
+                          {isMultiSelectMode && (
+                            <div className={`absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full border-2 border-white flex items-center justify-center transition-all shadow-sm z-10 ${isSelected ? 'bg-indigo-600 text-white' : 'bg-white text-slate-300'}`}>
+                               {isSelected && <Check size={12} />}
+                            </div>
+                          )}
+
+                          {/* Map Action Overlay (only in normal mode) */}
+                          {!isMultiSelectMode && (
+                            <div className="absolute inset-0 bg-slate-900/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[1px]">
+                               <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  mapPage(pageIdx);
+                                }}
+                                className="bg-white/90 text-indigo-600 p-1.5 rounded-full shadow-lg transform scale-90 group-hover:scale-100 transition-all hover:bg-white active:scale-95"
+                               >
+                                 <Plus size={16} />
+                               </button>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className={`text-[10px] font-sans font-medium transition-colors ${isActive || isSelected ? 'text-indigo-600 font-bold' : 'text-slate-400'}`}>
+                          {pageIdx}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Document>
+            </aside>
+          )}
+
+          {/* PDF Content */}
+          <div className="flex-1 overflow-auto bg-slate-200 p-12 flex justify-center custom-scrollbar">
+            <div 
+              ref={containerRef}
             className="relative shadow-[0_32px_64px_-12px_rgba(0,0,0,0.15)] bg-white cursor-crosshair select-none rounded-sm overflow-hidden"
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -297,8 +449,9 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
             )}
           </div>
         </div>
+      </div>
         
-        {/* Footer info */}
+      {/* Footer info */}
         <footer className="h-10 border-t border-slate-100 bg-white px-6 flex items-center justify-between shrink-0 text-[9px] text-slate-400 font-bold tracking-[0.2em] uppercase">
           <div className="flex items-center gap-2">
              <div className="w-1.5 h-1.5 rounded-full bg-indigo-400"></div>

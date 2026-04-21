@@ -377,7 +377,7 @@ export default function App() {
   };
 
   // Drawing State
-  const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector'>('none');
+  const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee'>('none');
   const [currentColor, setCurrentColor] = useState('#4f46e5');
 
   const addNode = useCallback((type: 'idea' | 'note' | 'group') => {
@@ -498,6 +498,14 @@ export default function App() {
 
           <div className="flex items-center gap-2 bg-slate-100/50 border border-slate-200 rounded-full p-1 px-1.5">
             <button 
+              onClick={() => setDrawingTool(drawingTool === 'marquee' ? 'none' : 'marquee')}
+              className={`p-2 rounded-full transition-all ${drawingTool === 'marquee' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
+              title="Marquee Selection (Click and drag to select multiple)"
+            >
+               <MousePointer2 size={16} />
+            </button>
+            <div className="h-4 w-[1px] bg-slate-200 mx-1" />
+            <button 
               onClick={() => setDrawingTool(drawingTool === 'pen' ? 'none' : 'pen')}
               className={`p-2 rounded-full transition-all ${drawingTool === 'pen' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
               title="Pen Tool"
@@ -595,17 +603,45 @@ export default function App() {
           }} 
           onClose={() => setActivePdf(null)}
           onClip={(clip) => {
-            setNodes((nds) => [...nds, {
-              id: uuidv4(),
-              type: 'pdfSnippet',
-              position: { x: 100, y: 100 },
-              data: { 
-                label: `Exerpt: ${activePdf.name}`, 
-                type: 'pdf-clip',
-                imageUrl: clip.imageUrl,
-                content: clip.text
-              }
-            }]);
+            if (clip.type === 'pdf-section' && clip.pages) {
+              const groupId = uuidv4();
+              const groupNode: WorkspaceNode = {
+                id: groupId,
+                type: 'group',
+                position: { x: 100, y: 100 },
+                style: { width: 800, height: 400 },
+                data: { label: clip.text || 'Document Section', type: 'group' }
+              };
+
+              const pageNodes: WorkspaceNode[] = clip.pages.map((p, idx) => ({
+                id: uuidv4(),
+                type: 'pdfPage',
+                position: { x: 20 + (idx * 200), y: 60 },
+                parentId: groupId,
+                extent: 'parent',
+                data: {
+                  label: p.label,
+                  type: 'pdf-page',
+                  imageUrl: p.imageUrl,
+                  aspectRatio: p.aspectRatio
+                }
+              }));
+
+              setNodes((nds) => [...nds, groupNode, ...pageNodes]);
+            } else {
+              setNodes((nds) => [...nds, {
+                id: uuidv4(),
+                type: clip.type === 'pdf-page' ? 'pdfPage' : 'pdfSnippet',
+                position: { x: 100, y: 100 },
+                data: { 
+                  label: clip.type === 'pdf-page' ? `Page from ${activePdf.name}` : clip.text || `Exerpt: ${activePdf.name}`, 
+                  type: clip.type || 'pdf-clip',
+                  imageUrl: clip.imageUrl,
+                  content: clip.text,
+                  aspectRatio: clip.aspectRatio
+                }
+              }]);
+            }
             setActivePdf(null);
           }}
         />

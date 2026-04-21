@@ -17,12 +17,13 @@ import {
   useReactFlow,
   ReactFlowProvider,
   useViewport,
-  NodeResizer
+  NodeResizer,
+  SelectionMode
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { WorkspaceNode, WorkspaceEdge, WorkspaceNodeData, PathData } from '../types';
 import { motion } from 'motion/react';
-import { StickyNote, Maximize2, Trash2, Link, Edit3, Quote, Copy } from 'lucide-react';
+import { StickyNote, Maximize2, Trash2, Link, Edit3, Quote, Copy, FileText, MousePointer2 } from 'lucide-react';
 import { getStroke } from 'perfect-freehand';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -244,8 +245,54 @@ const GroupNode = ({ id, data, selected }: NodeProps<WorkspaceNode>) => {
   );
 };
 
+const PDFPageNode = ({ data, selected }: NodeProps<WorkspaceNode>) => {
+  const baseWidth = 250;
+  const aspectRatio = data.aspectRatio || 0.707; // Default to vertical A4
+  const nodeHeight = baseWidth / aspectRatio;
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className={`relative transition-all group ${selected ? 'ring-4 ring-indigo-500/20 rounded' : ''}`}
+      style={{ width: baseWidth, height: nodeHeight }}
+    >
+      <Handle type="target" position={Position.Top} className="w-2 h-2 !bg-slate-300 border-none opacity-0 group-hover:opacity-100" />
+      
+      <div className="absolute top-2 right-2 bg-white/40 backdrop-blur-sm rounded px-1.5 py-0.5 text-[8px] font-bold text-slate-500 uppercase tracking-widest z-10 pointer-events-none opacity-0 group-hover:opacity-100">
+        Full Page
+      </div>
+
+      {data.imageUrl ? (
+        <div className="w-full h-full flex flex-col group overflow-hidden">
+          <div className={`flex-1 transition-all ${selected ? 'shadow-2xl scale-[1.02]' : 'shadow-sm'}`}>
+            <img 
+              src={data.imageUrl} 
+              alt="Page" 
+              className="w-full h-full object-cover" 
+              referrerPolicy="no-referrer"
+            />
+          </div>
+          {selected && (
+            <div className="absolute bottom-0 left-0 right-0 bg-white/80 backdrop-blur-sm px-2 py-1 flex items-center justify-center animate-in fade-in slide-in-from-bottom-1">
+              <div className="text-[9px] font-bold text-slate-500 truncate">{data.label}</div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="w-full h-full bg-slate-100/50 flex items-center justify-center rounded">
+          <FileText size={24} className="text-slate-300" />
+        </div>
+      )}
+      
+      <Handle type="source" position={Position.Bottom} className="w-2 h-2 !bg-slate-300 border-none opacity-0 group-hover:opacity-100" />
+    </motion.div>
+  );
+};
+
 const nodeTypes = {
   pdfSnippet: PDFSnippetNode,
+  pdfPage: PDFPageNode,
   idea: IdeaNode,
   note: NoteNode,
   group: GroupNode,
@@ -258,7 +305,7 @@ interface InfiniteCanvasProps {
   setEdges: React.Dispatch<React.SetStateAction<WorkspaceEdge[]>>;
   paths: PathData[];
   setPaths: React.Dispatch<React.SetStateAction<PathData[]>>;
-  drawingTool: 'none' | 'pen' | 'highlighter' | 'eraser' | 'connector';
+  drawingTool: 'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee';
   currentColor: string;
 }
 
@@ -342,12 +389,14 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
         panOnDrag={drawingTool === 'none'}
-        selectionOnDrag={drawingTool === 'none'}
+        selectionOnDrag={drawingTool === 'marquee'}
+        selectionMode={SelectionMode.Partial}
+        selectionKeyCode={null} 
         zoomOnScroll={true}
         panOnScroll={drawingTool === 'none'}
-        elementsSelectable={drawingTool === 'none' || drawingTool === 'connector' || drawingTool === 'eraser'}
+        elementsSelectable={drawingTool === 'none' || drawingTool === 'connector' || drawingTool === 'eraser' || drawingTool === 'marquee'}
         nodesConnectable={drawingTool === 'connector'}
-        nodesDraggable={drawingTool === 'none'}
+        nodesDraggable={drawingTool === 'none' || drawingTool === 'marquee'}
         fitView
       >
         <Background gap={32} size={1} color="#e2e8f0" />

@@ -18,11 +18,12 @@ export interface ExplorerItem {
 
 export type WorkspaceNodeData = {
   label: string;
-  type: 'pdf-clip' | 'note' | 'idea' | 'group';
+  type: 'pdf-clip' | 'note' | 'idea' | 'group' | 'pdf-page';
   content?: string;
   imageUrl?: string;
   clipRect?: { x: number; y: number; width: number; height: number };
   pageNumber?: number;
+  aspectRatio?: number;
 };
 
 export type WorkspaceNode = Node<WorkspaceNodeData>;
