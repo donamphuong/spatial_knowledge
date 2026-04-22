@@ -236,19 +236,22 @@ export default function App() {
     });
   }, [activeMapId, isInitialLoad]);
 
-  // 3. Optimized Auto-save (Incremental)
+  // 3. Optimized Auto-save (Incremental) - Debounced
   useEffect(() => {
-    if (isInitialLoad) return;
-    setSaveStatus('saving');
+    if (isInitialLoad || !directoryHandle) return;
+    
     const timer = setTimeout(async () => {
+      setSaveStatus('saving');
       try {
         await saveMetadata(items, directoryHandle);
         await saveContent(activeMapId, activeMapData, directoryHandle);
         setSaveStatus('saved');
       } catch (e) {
+        console.error('Save failed', e);
         setSaveStatus('error');
       }
-    }, 1000); // 1s debounce for "Obsidian-like" feel
+    }, 3000); // 3s debounce to avoid constant disk thrashing during drag/draw
+    
     return () => clearTimeout(timer);
   }, [items, activeMapData, activeMapId, isInitialLoad, directoryHandle]);
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useDeferredValue } from 'react';
 import { 
   Folder, 
   FileText, 
@@ -208,41 +208,17 @@ const ExplorerTreeItem = React.memo(({
 
 const MapOutlineItem = React.memo(({ 
   node, 
-  allNodes, 
   depth = 0, 
   onFocusNode, 
   onRenameNode 
 }: { 
   node: any, 
-  allNodes: any[], 
   depth?: number, 
   onFocusNode?: (nodeId: string) => void,
   onRenameNode?: (nodeId: string, name: string) => void
 }) => {
   const [isRenaming, setIsRenaming] = useState(false);
-  
-  // Use a combination of explicit parentId and visual containment for the sidebar hierarchy
-  const children = React.useMemo(() => {
-    return allNodes.filter(n => {
-      // Direct child in React Flow
-      if (n.parentId === node.id) return true;
-      
-      // Visual containment check for nodes that don't have an explicit parent
-      if (!n.parentId && node.type === 'group') {
-        const nx = n.position.x;
-        const ny = n.position.y;
-        const gx = node.position.x;
-        const gy = node.position.y;
-        const gw = node.style?.width || 100;
-        const gh = node.style?.height || 100;
-
-        // Consider node inside if its top-left is within group boundaries
-        return nx >= gx && nx <= gx + gw && ny >= gy && ny <= gy + gh;
-      }
-      return false;
-    });
-  }, [allNodes, node.id, node.type, node.position, node.style]);
-
+  const children = node.treeChildren || [];
   const hasChildren = children.length > 0;
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -300,7 +276,6 @@ const MapOutlineItem = React.memo(({
             <MapOutlineItem 
               key={child.id} 
               node={child} 
-              allNodes={allNodes} 
               depth={depth + 1} 
               onFocusNode={onFocusNode}
               onRenameNode={onRenameNode}
@@ -327,29 +302,69 @@ const Sidebar = React.memo(({
   onFocusNode,
   onRenameNode
 }: SidebarProps) => {
-  const rootItems = React.useMemo(() => items.filter(i => !i.parentId), [items]);
-  const rootNodes = React.useMemo(() => {
-    return nodes.filter(n => {
-      // If it has an explicit parent, it's not root
-      if (n.parentId) return false;
-      
-      // Visual containment check: if n is inside any group, it shouldn't be a root item
-      const isVisuallyParented = nodes.some(group => {
-        if (group.id === n.id || group.type !== 'group') return false;
-        
-        const nx = n.position.x;
-        const ny = n.position.y;
-        const gx = group.position.x;
-        const gy = group.position.y;
-        const gw = group.style?.width || 100;
-        const gh = group.style?.height || 100;
+  const rootItems = useMemo(() => items.filter(i => !i.parentId), [items]);
+  
+  // Use deferred value for nodes to prevent the O(N^2) containment checks 
+  // from blocking the main thread during rapid updates like dragging
+  const deferredNodes = useDeferredValue(nodes || []);
 
-        return nx >= gx && nx <= gx + gw && ny >= gy && ny <= gy + gh;
-      });
+  const treeData = useMemo(() => {
+    const nodeMap = new Map<string, any>();
+    const roots: any[] = [];
+    
+    // Only include groups in the outline
+    const groupNodes = deferredNodes.filter(n => n.type === 'group');
 
-      return !isVisuallyParented;
+    // Pass 1: Initialize all group nodes in the map with empty children
+    groupNodes.forEach(n => {
+      nodeMap.set(n.id, { ...n, treeChildren: [] });
     });
-  }, [nodes]);
+
+    // Pass 2: Build the hierarchy based on parentId or visual containment (group-to-group only)
+    groupNodes.forEach(n => {
+      const nodeInTree = nodeMap.get(n.id);
+      
+      // 1. Check for explicit parent (if parent is also a group)
+      if (n.parentId && nodeMap.has(n.parentId)) {
+        nodeMap.get(n.parentId).treeChildren.push(nodeInTree);
+        return;
+      }
+
+      // 2. Check for visual containment if no explicit parent exists
+      if (!n.parentId) {
+        let visualParentId: string | null = null;
+        
+        // Only groups can be visual parents
+        const groups = groupNodes.filter(potParent => potParent.id !== n.id);
+
+        for (const group of groups) {
+          const nx = n.position.x;
+          const ny = n.position.y;
+          const gx = group.position.x;
+          const gy = group.position.y;
+          const gw = group.style?.width || 100;
+          const gh = group.style?.height || 100;
+
+          if (nx >= gx && nx <= gx + gw && ny >= gy && ny <= gy + gh) {
+            visualParentId = group.id;
+            break; 
+          }
+        }
+
+        if (visualParentId && nodeMap.has(visualParentId)) {
+          nodeMap.get(visualParentId).treeChildren.push(nodeInTree);
+          return;
+        }
+      }
+
+      // 3. If no parent found, it's a root node
+      roots.push(nodeInTree);
+    });
+
+    return roots;
+  }, [deferredNodes]);
+
+  const groupCount = useMemo(() => nodes.filter(n => n.type === 'group').length, [nodes]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -451,21 +466,20 @@ const Sidebar = React.memo(({
             />
           ))}
 
-          {activeMapId && nodes.length > 0 && (
+          {activeMapId && groupCount > 0 && (
             <div className="mt-8 mb-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
               <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2 mx-2">
                 <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                  <Maximize2 size={10} /> Map Outline
+                  <Maximize2 size={10} /> Group Hierarchy
                 </h3>
-                <span className="text-[9px] font-mono font-bold bg-indigo-50 text-indigo-500 px-2 py-0.5 rounded-full">{nodes.length}</span>
+                <span className="text-[9px] font-mono font-bold bg-indigo-50 text-indigo-500 px-2 py-0.5 rounded-full">{groupCount}</span>
               </div>
               
               <div className="flex flex-col gap-0.5">
-                {rootNodes.map(node => (
+                {treeData.map(node => (
                   <MapOutlineItem 
                     key={node.id} 
                     node={node} 
-                    allNodes={nodes} 
                     onFocusNode={onFocusNode}
                     onRenameNode={onRenameNode}
                   />
