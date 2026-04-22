@@ -72,3 +72,32 @@
   filter: drop-shadow(0 0 4px #ef4444) !important;
   cursor: pointer !important;
 }
+
+/* Fix high-resolution canvas overflowing the sidebar thumbnail */
+.pdf-thumbnail-page {
+  width: 100% !important;
+  height: auto !important;
+}
+
+.pdf-thumbnail-page canvas {
+  width: 100% !important;
+  height: auto !important;
+  display: block;
+}
+
+/* Global PDF Reset to fit perfectly */
+.react-pdf__Page {
+  background-color: transparent !important;
+  margin: 0 !important;
+  display: flex !important;
+  justify-content: center !important;
+}
+
+.react-pdf__Document {
+  background-color: transparent !important;
+}
+
+.react-pdf__Page__canvas {
+  margin: 0 !important;
+  display: block !important;
+}

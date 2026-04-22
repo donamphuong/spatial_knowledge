@@ -43,7 +43,7 @@ function getSvgPathFromStroke(stroke: number[][]) {
 }
 
 // ... keeping custom nodes ...
-const PDFSnippetNode = ({ data }: NodeProps<WorkspaceNode>) => {
+const PDFSnippetNode = ({ data, selected }: NodeProps<WorkspaceNode>) => {
   const [copied, setCopied] = useState(false);
 
   const copyToClipboard = () => {
@@ -58,11 +58,12 @@ const PDFSnippetNode = ({ data }: NodeProps<WorkspaceNode>) => {
     <motion.div 
       initial={{ opacity: 0, scale: 0.9, y: 10 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      className="bg-white border border-slate-200 rounded shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden min-w-[240px] max-w-[400px] border-b-2 border-b-indigo-100"
+      className={`relative h-full w-full bg-white border border-slate-200 rounded shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden border-b-2 border-b-indigo-100 group transition-all ${selected ? 'ring-4 ring-indigo-500/20' : ''}`}
     >
+      <NodeResizer minWidth={150} minHeight={100} isVisible={selected} lineClassName="border-indigo-400" handleClassName="h-2 w-2 bg-white border-2 border-indigo-500 rounded" />
       <Handle type="target" position={Position.Top} className="w-1.5 h-1.5 !bg-slate-300 border-none" />
       
-      <div className="px-3 py-1.5 bg-[#fcfcf7] border-b border-slate-100 flex items-center justify-between">
+      <div className="px-3 py-1.5 bg-[#fcfcf7] border-b border-slate-100 flex items-center justify-between shrink-0">
          <div className="flex items-center gap-2">
            <Quote size={10} className="text-indigo-400" />
            <span className="text-[9px] font-sans font-bold text-slate-400 uppercase tracking-widest leading-none">Document Fragment</span>
@@ -78,20 +79,22 @@ const PDFSnippetNode = ({ data }: NodeProps<WorkspaceNode>) => {
          )}
       </div>
 
-      {data.imageUrl && (
-        <div className="bg-[#fafafa] p-2 overflow-hidden flex items-center justify-center border-b border-slate-50">
-          <img src={data.imageUrl} alt="Clip" className="w-full h-auto rounded border border-slate-200" />
-        </div>
-      )}
-      
-      <div className="p-4 pt-3">
-        {data.content && (
-          <div className="bg-[#fefce8]/40 p-3 rounded text-[11px] text-slate-800 font-sans border-l-2 border-indigo-400/50 italic mb-3 leading-relaxed">
-            "{data.content}"
+      <div className="flex flex-col h-full overflow-hidden">
+        {data.imageUrl && (
+          <div className="bg-[#fafafa] p-2 overflow-hidden flex items-center justify-center border-b border-slate-50 shrink-0">
+            <img src={data.imageUrl} alt="Clip" className="w-full h-auto rounded border border-slate-200" />
           </div>
         )}
-        <div className="text-[11px] text-slate-500 leading-relaxed font-sans font-medium">
-          {data.label}
+        
+        <div className="p-4 pt-3 flex-1 overflow-auto custom-scrollbar">
+          {data.content && (
+            <div className="bg-[#fefce8]/40 p-3 rounded text-[11px] text-slate-800 font-sans border-l-2 border-indigo-400/50 italic mb-3 leading-relaxed">
+              "{data.content}"
+            </div>
+          )}
+          <div className="text-[11px] text-slate-500 leading-relaxed font-sans font-medium">
+            {data.label}
+          </div>
         </div>
       </div>
       
@@ -246,41 +249,44 @@ const GroupNode = ({ id, data, selected }: NodeProps<WorkspaceNode>) => {
 };
 
 const PDFPageNode = ({ data, selected }: NodeProps<WorkspaceNode>) => {
-  const baseWidth = 250;
-  const aspectRatio = data.aspectRatio || 0.707; // Default to vertical A4
-  const nodeHeight = baseWidth / aspectRatio;
-
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      className={`relative transition-all group ${selected ? 'ring-4 ring-indigo-500/20 rounded' : ''}`}
-      style={{ width: baseWidth, height: nodeHeight }}
+      className={`relative h-full w-full transition-all group ${selected ? 'ring-2 ring-indigo-500 rounded-sm' : ''}`}
     >
+      <NodeResizer 
+        minWidth={50} 
+        minHeight={50} 
+        isVisible={selected} 
+        lineClassName="border-indigo-400" 
+        handleClassName="h-3 w-3 bg-white border-2 border-indigo-500 rounded-full shadow-md"
+        keepAspectRatio={true}
+      />
       <Handle type="target" position={Position.Top} className="w-2 h-2 !bg-slate-300 border-none opacity-0 group-hover:opacity-100" />
       
-      <div className="absolute top-2 right-2 bg-white/40 backdrop-blur-sm rounded px-1.5 py-0.5 text-[8px] font-bold text-slate-500 uppercase tracking-widest z-10 pointer-events-none opacity-0 group-hover:opacity-100">
-        Full Page
+      <div className="absolute top-2 right-2 bg-white/60 backdrop-blur-md rounded-full px-2 py-0.5 text-[7px] font-bold text-slate-500 uppercase tracking-widest z-10 pointer-events-none opacity-0 group-hover:opacity-100 shadow-sm border border-white/40">
+        Page Layer
       </div>
 
       {data.imageUrl ? (
-        <div className="w-full h-full flex flex-col group overflow-hidden">
-          <div className={`flex-1 transition-all ${selected ? 'shadow-2xl scale-[1.02]' : 'shadow-sm'}`}>
+        <div className="w-full h-full flex flex-col group overflow-hidden bg-white shadow-sm ring-1 ring-black/5 rounded-sm">
+          <div className={`flex-1 transition-all h-full w-full ${selected ? 'shadow-xl' : ''}`}>
             <img 
               src={data.imageUrl} 
               alt="Page" 
-              className="w-full h-full object-cover" 
+              className="w-full h-full object-contain" 
               referrerPolicy="no-referrer"
             />
           </div>
           {selected && (
-            <div className="absolute bottom-0 left-0 right-0 bg-white/80 backdrop-blur-sm px-2 py-1 flex items-center justify-center animate-in fade-in slide-in-from-bottom-1">
-              <div className="text-[9px] font-bold text-slate-500 truncate">{data.label}</div>
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-full flex items-center justify-center animate-in fade-in slide-in-from-bottom-2 border border-white/10 shadow-2xl z-20">
+              <div className="text-[8px] font-bold text-white truncate max-w-[120px] tracking-tight">{data.label}</div>
             </div>
           )}
         </div>
       ) : (
-        <div className="w-full h-full bg-slate-100/50 flex items-center justify-center rounded">
+        <div className="w-full h-full bg-slate-50 flex items-center justify-center rounded-sm border border-slate-100">
           <FileText size={24} className="text-slate-300" />
         </div>
       )}

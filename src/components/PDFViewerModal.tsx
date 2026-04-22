@@ -30,16 +30,25 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
   const [pageNumber, setPageNumber] = useState<number>(1);
   const [scale, setScale] = useState<number>(1.2);
   const [isClipping, setIsClipping] = useState(false);
+  const [pageAspectRatios, setPageAspectRatios] = useState<Record<number, number>>({});
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+
+  const onPageLoadSuccess = (pageIdx: number, page: any) => {
+    const { originalWidth, originalHeight } = page;
+    setPageAspectRatios(prev => ({
+      ...prev,
+      [pageIdx]: originalWidth / originalHeight
+    }));
+  };
 
   // Auto-scale to fit height on load
   useEffect(() => {
     const updateScale = () => {
       const windowHeight = window.innerHeight;
-      const targetScale = (windowHeight - 200) / 842; // standard A4 height is ~842pt
-      setScale(Math.max(0.6, Math.min(1.5, targetScale)));
+      const targetScale = (windowHeight - 100) / 842; // standard A4 height is ~842pt
+      setScale(Math.max(0.4, Math.min(2.5, targetScale)));
     };
     updateScale();
     window.addEventListener('resize', updateScale);
@@ -212,9 +221,9 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
       const thumbContainer = document.getElementById(`thumb-container-${pageNum}`);
       const thumbCanvas = thumbContainer?.querySelector('canvas') as HTMLCanvasElement;
       return {
-        imageUrl: thumbCanvas?.toDataURL('image/png') || '',
+        imageUrl: thumbCanvas?.toDataURL('image/png', 0.95) || '',
         label: `Page ${pageNum} from ${file.name}`,
-        aspectRatio: thumbCanvas ? thumbCanvas.width / thumbCanvas.height : 1
+        aspectRatio: pageAspectRatios[pageNum] || (thumbCanvas ? thumbCanvas.width / thumbCanvas.height : 1)
       };
     }).filter(p => p.imageUrl);
 
@@ -233,12 +242,12 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
     const thumbCanvas = thumbContainer?.querySelector('canvas') as HTMLCanvasElement;
     if (!thumbCanvas) return;
 
-    const imageUrl = thumbCanvas.toDataURL('image/png');
+    const imageUrl = thumbCanvas.toDataURL('image/png', 0.95);
     onClip({ 
       imageUrl, 
       text: `Page ${pageNum} from ${file.name}`,
       type: 'pdf-page',
-      aspectRatio: thumbCanvas.width / thumbCanvas.height
+      aspectRatio: pageAspectRatios[pageNum] || (thumbCanvas.width / thumbCanvas.height)
     });
   }, [file.name, onClip]);
 
@@ -354,13 +363,14 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
                         onClick={() => isMultiSelectMode ? togglePageSelection(pageIdx) : setPageNumber(pageIdx)}
                         className="flex flex-col items-center gap-2 group w-full cursor-pointer relative"
                       >
-                        <div className={`relative transition-all bg-white shadow-sm ring-1 ring-black/5 ${isActive ? 'ring-2 ring-indigo-500 shadow-indigo-100' : isSelected ? 'ring-2 ring-indigo-400 shadow-indigo-50' : 'hover:ring-black/10'}`}>
+                        <div className={`relative w-[100px] transition-all bg-white shadow-sm ring-1 ring-black/5 overflow-hidden ${isActive ? 'ring-2 ring-indigo-500 shadow-indigo-100' : isSelected ? 'ring-2 ring-indigo-400 shadow-indigo-50' : 'hover:ring-black/10'}`}>
                           <Page 
                             pageNumber={pageIdx} 
-                            width={120}
-                            className="bg-white"
+                            width={1200} // High resolution for crisp mapping/captures when sent to canvas
+                            className="pdf-thumbnail-page bg-white"
                             renderAnnotationLayer={false}
                             renderTextLayer={false}
+                            onLoadSuccess={(page) => onPageLoadSuccess(pageIdx, page)}
                           />
                           
                           {/* Selection Badge */}
@@ -398,14 +408,14 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
           )}
 
           {/* PDF Content */}
-          <div className="flex-1 overflow-auto bg-slate-200 p-12 flex justify-center custom-scrollbar">
+          <div className="flex-1 overflow-auto bg-slate-100/80 flex flex-col items-center justify-start py-12 px-8 custom-scrollbar relative">
             <div 
               ref={containerRef}
-            className="relative shadow-[0_32px_64px_-12px_rgba(0,0,0,0.15)] bg-white cursor-crosshair select-none rounded-sm overflow-hidden"
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-          >
+              className="relative cursor-crosshair select-none overflow-hidden bg-white shadow-[0_20px_50px_rgba(0,0,0,0.1)] ring-1 ring-slate-200 rounded-sm mb-12"
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+            >
             <Document
               file={file.content}
               onLoadSuccess={onDocumentLoadSuccess}

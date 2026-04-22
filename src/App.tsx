@@ -605,34 +605,47 @@ export default function App() {
           onClip={(clip) => {
             if (clip.type === 'pdf-section' && clip.pages) {
               const groupId = uuidv4();
+              
+              const pageNodes: WorkspaceNode[] = clip.pages.map((p, idx) => {
+                const width = 600; // Actual document size for the canvas map
+                const height = width / (p.aspectRatio || 0.707);
+                return {
+                  id: uuidv4(),
+                  type: 'pdfPage',
+                  position: { x: 40 + (idx * (width + 40)), y: 80 },
+                  parentId: groupId,
+                  extent: 'parent',
+                  style: { width, height },
+                  data: {
+                    label: p.label,
+                    type: 'pdf-page',
+                    imageUrl: p.imageUrl,
+                    aspectRatio: p.aspectRatio
+                  }
+                };
+              });
+
               const groupNode: WorkspaceNode = {
                 id: groupId,
                 type: 'group',
                 position: { x: 100, y: 100 },
-                style: { width: 800, height: 400 },
+                style: { 
+                  width: pageNodes.length * 640 + 40, 
+                  height: Math.max(...pageNodes.map(n => (n.style?.height as number) || 0)) + 120 
+                },
                 data: { label: clip.text || 'Document Section', type: 'group' }
               };
 
-              const pageNodes: WorkspaceNode[] = clip.pages.map((p, idx) => ({
-                id: uuidv4(),
-                type: 'pdfPage',
-                position: { x: 20 + (idx * 200), y: 60 },
-                parentId: groupId,
-                extent: 'parent',
-                data: {
-                  label: p.label,
-                  type: 'pdf-page',
-                  imageUrl: p.imageUrl,
-                  aspectRatio: p.aspectRatio
-                }
-              }));
-
               setNodes((nds) => [...nds, groupNode, ...pageNodes]);
             } else {
+              const width = clip.type === 'pdf-page' ? 600 : 280;
+              const height = clip.type === 'pdf-page' ? (600 / (clip.aspectRatio || 0.707)) : 350;
+              
               setNodes((nds) => [...nds, {
                 id: uuidv4(),
                 type: clip.type === 'pdf-page' ? 'pdfPage' : 'pdfSnippet',
                 position: { x: 100, y: 100 },
+                style: { width, height },
                 data: { 
                   label: clip.type === 'pdf-page' ? `Page from ${activePdf.name}` : clip.text || `Exerpt: ${activePdf.name}`, 
                   type: clip.type || 'pdf-clip',
