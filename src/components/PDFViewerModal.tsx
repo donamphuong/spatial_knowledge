@@ -492,7 +492,7 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
                         <div className={`relative w-[100px] transition-all bg-white shadow-sm ring-1 ring-black/5 overflow-hidden ${isActive ? 'ring-2 ring-indigo-500 shadow-indigo-100' : isSelected ? 'ring-2 ring-indigo-400 shadow-indigo-50' : 'hover:ring-black/10'}`}>
                           <Page 
                             pageNumber={pageIdx} 
-                            width={300} 
+                            width={2048} 
                             className="pdf-thumbnail-page bg-white"
                             renderAnnotationLayer={false}
                             renderTextLayer={false}
