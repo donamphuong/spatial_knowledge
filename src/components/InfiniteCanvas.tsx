@@ -43,7 +43,7 @@ function getSvgPathFromStroke(stroke: number[][]) {
 }
 
 // ... keeping custom nodes ...
-const PDFSnippetNode = ({ data, selected }: NodeProps<WorkspaceNode>) => {
+const PDFSnippetNode = React.memo(({ data, selected }: NodeProps<WorkspaceNode>) => {
   const [copied, setCopied] = useState(false);
 
   const copyToClipboard = () => {
@@ -101,9 +101,9 @@ const PDFSnippetNode = ({ data, selected }: NodeProps<WorkspaceNode>) => {
       <Handle type="source" position={Position.Bottom} className="w-1.5 h-1.5 !bg-slate-300 border-none" />
     </motion.div>
   );
-};
+});
 
-const NoteNode = ({ id, data }: NodeProps<WorkspaceNode>) => {
+const NoteNode = React.memo(({ id, data }: NodeProps<WorkspaceNode>) => {
   const { setNodes } = useReactFlow();
   const [isEditing, setIsEditing] = useState(false);
   const editRef = useRef<HTMLDivElement>(null);
@@ -159,9 +159,9 @@ const NoteNode = ({ id, data }: NodeProps<WorkspaceNode>) => {
       <Handle type="source" position={Position.Bottom} className="w-1.5 h-1.5 !bg-yellow-600/20 border-none opacity-0 group-hover:opacity-100 transition-opacity" />
     </motion.div>
   );
-};
+});
 
-const IdeaNode = ({ id, data }: NodeProps<WorkspaceNode>) => {
+const IdeaNode = React.memo(({ id, data }: NodeProps<WorkspaceNode>) => {
   const { setNodes } = useReactFlow();
   const [isEditing, setIsEditing] = useState(false);
 
@@ -209,9 +209,9 @@ const IdeaNode = ({ id, data }: NodeProps<WorkspaceNode>) => {
       <Handle type="source" position={Position.Bottom} className="w-2 h-2 !bg-slate-700 border-none" />
     </motion.div>
   );
-};
+});
 
-const GroupNode = ({ id, data, selected }: NodeProps<WorkspaceNode>) => {
+const GroupNode = React.memo(({ id, data, selected }: NodeProps<WorkspaceNode>) => {
   const { setNodes } = useReactFlow();
   const [isEditing, setIsEditing] = useState(false);
 
@@ -246,9 +246,9 @@ const GroupNode = ({ id, data, selected }: NodeProps<WorkspaceNode>) => {
       <Handle type="source" position={Position.Bottom} className="w-2 h-2 !bg-indigo-300 border-none opacity-50 hover:opacity-100" />
     </div>
   );
-};
+});
 
-const PDFPageNode = ({ data, selected }: NodeProps<WorkspaceNode>) => {
+const PDFPageNode = React.memo(({ data, selected }: NodeProps<WorkspaceNode>) => {
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.95 }}
@@ -294,7 +294,7 @@ const PDFPageNode = ({ data, selected }: NodeProps<WorkspaceNode>) => {
       <Handle type="source" position={Position.Bottom} className="w-2 h-2 !bg-slate-300 border-none opacity-0 group-hover:opacity-100" />
     </motion.div>
   );
-};
+});
 
 const nodeTypes = {
   pdfSnippet: PDFSnippetNode,
@@ -311,9 +311,30 @@ interface InfiniteCanvasProps {
   setEdges: React.Dispatch<React.SetStateAction<WorkspaceEdge[]>>;
   paths: PathData[];
   setPaths: React.Dispatch<React.SetStateAction<PathData[]>>;
-  drawingTool: 'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee';
+  drawingTool: 'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee' | 'hand';
   currentColor: string;
 }
+
+const CanvasPath = React.memo(({ path, drawingTool, onClick }: { path: PathData, drawingTool: string, onClick: (id: string, e: React.MouseEvent) => void }) => {
+  const stroke = getStroke(path.points, {
+    size: path.width,
+    thinning: 0.5,
+    smoothing: 0.5,
+    streamline: 0.5,
+  });
+  const d = getSvgPathFromStroke(stroke);
+  
+  return (
+    <path
+      d={d}
+      fill={path.color}
+      opacity={path.opacity}
+      style={{ pointerEvents: drawingTool === 'eraser' ? 'auto' : 'none' }}
+      onClick={(e) => onClick(path.id, e)}
+      className={drawingTool === 'eraser' ? 'cursor-pointer hover:opacity-50 transition-opacity' : ''}
+    />
+  );
+});
 
 function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawingTool, currentColor }: InfiniteCanvasProps) {
   const { screenToFlowPosition } = useReactFlow();
@@ -348,12 +369,12 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
     setCurrentPath(null);
   }, [currentPath, currentColor, drawingTool, setPaths]);
 
-  const onPathClick = (id: string, e: React.MouseEvent) => {
+  const onPathClick = useCallback((id: string, e: React.MouseEvent) => {
     if (drawingTool === 'eraser') {
       e.stopPropagation();
       setPaths(prev => prev.filter(p => p.id !== id));
     }
-  };
+  }, [drawingTool, setPaths]);
 
   const onNodeClick = (_: React.MouseEvent, node: WorkspaceNode) => {
     if (drawingTool === 'eraser') {
@@ -381,7 +402,7 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
   };
 
   return (
-    <div className={`w-full h-full relative overflow-hidden ${isDrawing ? 'cursor-crosshair' : drawingTool === 'eraser' ? 'eraser-mode active cursor-crosshair' : ''}`}>
+    <div className={`w-full h-full relative overflow-hidden ${isDrawing ? 'cursor-crosshair' : drawingTool === 'eraser' ? 'eraser-mode active cursor-crosshair' : drawingTool === 'hand' ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -391,48 +412,36 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
         onNodeClick={onNodeClick}
         onEdgeClick={onEdgeClick}
         nodeTypes={nodeTypes}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        panOnDrag={drawingTool === 'none'}
+        panOnDrag={drawingTool === 'hand'}
         selectionOnDrag={drawingTool === 'marquee'}
         selectionMode={SelectionMode.Partial}
         selectionKeyCode={null} 
         zoomOnScroll={true}
-        panOnScroll={drawingTool === 'none'}
-        elementsSelectable={drawingTool === 'none' || drawingTool === 'connector' || drawingTool === 'eraser' || drawingTool === 'marquee'}
+        panOnScroll={drawingTool !== 'pen' && drawingTool !== 'highlighter'}
+        elementsSelectable={drawingTool === 'hand' || drawingTool === 'connector' || drawingTool === 'eraser' || drawingTool === 'marquee'}
         nodesConnectable={drawingTool === 'connector'}
-        nodesDraggable={drawingTool === 'none' || drawingTool === 'marquee'}
+        nodesDraggable={drawingTool === 'hand'}
         fitView
       >
         <Background gap={32} size={1} color="#e2e8f0" />
         
-        <Panel position="top-left" className="pointer-events-none !m-0 w-full h-full">
+        <Panel position="top-left" className={`${isDrawing ? 'pointer-events-auto' : 'pointer-events-none'} !m-0 w-full h-full z-50`}>
           <svg 
-             className="w-full h-full overflow-visible pointer-events-none z-50"
+             onMouseDown={onMouseDown}
+             onMouseMove={onMouseMove}
+             onMouseUp={onMouseUp}
+             className={`w-full h-full overflow-visible ${isDrawing ? 'pointer-events-auto' : 'pointer-events-none'}`}
              style={{ transformOrigin: '0 0' }}
           >
              <g transform={`translate(${x},${y}) scale(${zoom})`}>
-                {paths.map((path) => {
-                  const stroke = getStroke(path.points, {
-                    size: path.width,
-                    thinning: 0.5,
-                    smoothing: 0.5,
-                    streamline: 0.5,
-                  });
-                  const d = getSvgPathFromStroke(stroke);
-                  return (
-                    <path
-                      key={path.id}
-                      d={d}
-                      fill={path.color}
-                      opacity={path.opacity}
-                      style={{ pointerEvents: drawingTool === 'eraser' ? 'auto' : 'none' }}
-                      onClick={(e) => onPathClick(path.id, e)}
-                      className={drawingTool === 'eraser' ? 'cursor-pointer hover:opacity-50 transition-opacity' : ''}
-                    />
-                  );
-                })}
+                {paths.map((path) => (
+                  <CanvasPath 
+                    key={path.id} 
+                    path={path} 
+                    drawingTool={drawingTool} 
+                    onClick={onPathClick} 
+                  />
+                ))}
                 
                 {currentPath && (
                   <path

@@ -35,6 +35,8 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
 
+  const [documentRendered, setDocumentRendered] = useState(false);
+
   const onPageLoadSuccess = (pageIdx: number, page: any) => {
     const { originalWidth, originalHeight } = page;
     setPageAspectRatios(prev => ({
@@ -42,6 +44,31 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
       [pageIdx]: originalWidth / originalHeight
     }));
   };
+
+  // Track current page via scroll position
+  useEffect(() => {
+    if (!documentRendered || numPages === 0 || !containerRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const pageNum = parseInt(entry.target.getAttribute('data-page-number') || '1');
+            setPageNumber(pageNum);
+          }
+        });
+      },
+      {
+        root: containerRef.current,
+        threshold: 0.5, // Page is "active" when 50% visible
+      }
+    );
+
+    const pages = containerRef.current.querySelectorAll('.pdf-page-container');
+    pages.forEach((p) => observer.observe(p));
+
+    return () => observer.disconnect();
+  }, [documentRendered, numPages]);
 
   // Auto-scale to fit height on load
   useEffect(() => {
@@ -82,10 +109,10 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
   const handleMouseDown = (e: React.MouseEvent) => {
     if (!isClipping) return;
     const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
+    if (!rect || !containerRef.current) return;
     
-    const startX = e.clientX - rect.left;
-    const startY = e.clientY - rect.top;
+    const startX = e.clientX - rect.left + containerRef.current.scrollLeft;
+    const startY = e.clientY - rect.top + containerRef.current.scrollTop;
     
     selectionRef.current = { startX, startY };
     setIsDragging(true);
@@ -93,12 +120,12 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging || !selectionRef.current) return;
+    if (!isDragging || !selectionRef.current || !containerRef.current) return;
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    const currentX = e.clientX - rect.left;
-    const currentY = e.clientY - rect.top;
+    const currentX = e.clientX - rect.left + containerRef.current.scrollLeft;
+    const currentY = e.clientY - rect.top + containerRef.current.scrollTop;
     
     const x = Math.min(selectionRef.current.startX, currentX);
     const y = Math.min(selectionRef.current.startY, currentY);
@@ -115,95 +142,112 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
   const captureClip = useCallback(() => {
     if (!selection || !containerRef.current) return;
     
-    // Find the canvas rendered by react-pdf inside our container
-    const pdfCanvas = containerRef.current.querySelector('canvas');
+    // In continuous scroll, find the page container that overlaps most with selection
+    const pageContainers = Array.from(containerRef.current.querySelectorAll('.pdf-page-container'));
+    
+    let targetPageContainer: HTMLElement | null = null;
+    let maxOverlap = 0;
+
+    pageContainers.forEach((container) => {
+      const htmlContainer = container as HTMLElement;
+      const rect = {
+        top: htmlContainer.offsetTop,
+        left: htmlContainer.offsetLeft,
+        bottom: htmlContainer.offsetTop + htmlContainer.offsetHeight,
+        right: htmlContainer.offsetLeft + htmlContainer.offsetWidth
+      };
+
+      const overlapArea = Math.max(0, Math.min(selection.y + selection.h, rect.bottom) - Math.max(selection.y, rect.top)) *
+                          Math.max(0, Math.min(selection.x + selection.w, rect.right) - Math.max(selection.x, rect.left));
+
+      if (overlapArea > maxOverlap) {
+        maxOverlap = overlapArea;
+        targetPageContainer = htmlContainer;
+      }
+    });
+
+    if (!targetPageContainer) return;
+
+    const pageNum = parseInt(targetPageContainer.getAttribute('data-page-number') || '1');
+    const pdfCanvas = targetPageContainer.querySelector('canvas') as HTMLCanvasElement;
     if (!pdfCanvas) return;
 
     const cropCanvas = document.createElement('canvas');
     const ctx = cropCanvas.getContext('2d');
     if (!ctx) return;
 
-    // The react-pdf canvas might be scaled by devicePixelRatio
-    const dpr = window.devicePixelRatio || 1;
-    // We need to find where the page canvas is relative to our selection container
+    // Canvas coordinates relative to the specific targeted page container
+    const relativeX = selection.x - (targetPageContainer as HTMLElement).offsetLeft;
+    const relativeY = selection.y - (targetPageContainer as HTMLElement).offsetTop;
+
     const canvasRect = pdfCanvas.getBoundingClientRect();
-    const containerRect = containerRef.current.getBoundingClientRect();
+    const containerRect = targetPageContainer.getBoundingClientRect();
 
-    const offsetX = canvasRect.left - containerRect.left;
-    const offsetY = canvasRect.top - containerRect.top;
+    const ox = canvasRect.left - containerRect.left;
+    const oy = canvasRect.top - containerRect.top;
 
-    // Convert selection to canvas coordinates
-    const sourceX = (selection.x - offsetX) * (pdfCanvas.width / canvasRect.width);
-    const sourceY = (selection.y - offsetY) * (pdfCanvas.height / canvasRect.height);
+    const sourceX = (relativeX - ox) * (pdfCanvas.width / canvasRect.width);
+    const sourceY = (relativeY - oy) * (pdfCanvas.height / canvasRect.height);
     const sourceW = selection.w * (pdfCanvas.width / canvasRect.width);
     const sourceH = selection.h * (pdfCanvas.height / canvasRect.height);
 
     cropCanvas.width = sourceW;
     cropCanvas.height = sourceH;
 
-    ctx.drawImage(
-      pdfCanvas,
-      sourceX, sourceY, sourceW, sourceH, // source
-      0, 0, sourceW, sourceH // destination
-    );
+    ctx.drawImage(pdfCanvas, sourceX, sourceY, sourceW, sourceH, 0, 0, sourceW, sourceH);
 
     const imageUrl = cropCanvas.toDataURL('image/png');
     
     // TEXT EXTRACTION LOGIC
-    // We inspect the rendered text layer spans to find what falls within selection
     let extractedText = "";
-    if (containerRef.current) {
-      const textLayer = containerRef.current.querySelector('.react-pdf__Page__textContent');
-      if (textLayer) {
-        const textItems = Array.from(textLayer.querySelectorAll('span')) as HTMLElement[];
-        const containerRect = containerRef.current.getBoundingClientRect();
-        
-        // Selection relative to viewport
-        const selLeft = selection.x + containerRect.left;
-        const selTop = selection.y + containerRect.top;
-        const selRight = selLeft + selection.w;
-        const selBottom = selTop + selection.h;
+    const textLayer = targetPageContainer.querySelector('.react-pdf__Page__textContent');
+    if (textLayer) {
+      const textItems = Array.from(textLayer.querySelectorAll('span')) as HTMLElement[];
+      const scrollLeft = containerRef.current.scrollLeft;
+      const scrollTop = containerRef.current.scrollTop;
+      const viewerRect = containerRef.current.getBoundingClientRect();
+      
+      const viewportSelLeft = selection.x - scrollLeft + viewerRect.left;
+      const viewportSelTop = selection.y - scrollTop + viewerRect.top;
+      const viewportSelRight = viewportSelLeft + selection.w;
+      const viewportSelBottom = viewportSelTop + selection.h;
 
-        // Group items into lines to preserve roughly correct layout
-        const lineMap = new Map<number, { el: HTMLElement, rect: DOMRect }[]>();
-        
-        textItems.forEach(item => {
-          const rect = item.getBoundingClientRect();
-          // Check intersection
-          const isIntersecting = !(
-            rect.right < selLeft || 
-            rect.left > selRight || 
-            rect.bottom < selTop || 
-            rect.top > selBottom
-          );
+      const lineMap = new Map<number, { el: HTMLElement, rect: DOMRect }[]>();
+      
+      textItems.forEach(item => {
+        const rect = item.getBoundingClientRect();
+        const isIntersecting = !(
+          rect.right < viewportSelLeft || 
+          rect.left > viewportSelRight || 
+          rect.bottom < viewportSelTop || 
+          rect.top > viewportSelBottom
+        );
 
-          if (isIntersecting) {
-            const y = Math.round(rect.top / 5) * 5; // Bucket by vertical position
-            if (!lineMap.has(y)) lineMap.set(y, []);
-            lineMap.get(y)?.push({ el: item, rect });
-          }
-        });
+        if (isIntersecting) {
+          const y = Math.round(rect.top / 5) * 5;
+          if (!lineMap.has(y)) lineMap.set(y, []);
+          lineMap.get(y)?.push({ el: item, rect });
+        }
+      });
 
-        // Sort lines vertically, then items horizontally within lines
-        const sortedLines = Array.from(lineMap.keys()).sort((a, b) => a - b);
-        extractedText = sortedLines.map(y => {
-          const items = lineMap.get(y) || [];
-          return items.sort((a, b) => a.rect.left - b.rect.left)
-                      .map(i => i.el.innerText)
-                      .join(' ');
-        }).join('\n');
-      }
+      const sortedLines = Array.from(lineMap.keys()).sort((a, b) => a - b);
+      extractedText = sortedLines.map(y => {
+        const items = lineMap.get(y) || [];
+        return items.sort((a, b) => a.rect.left - b.rect.left)
+                    .map(i => i.el.innerText)
+                    .join(' ');
+      }).join('\n');
     }
 
     onClip({ 
       imageUrl, 
-      text: extractedText.trim() || `Annotation from page ${pageNumber}`,
+      text: extractedText.trim() || `Annotation from page ${pageNum}`,
       type: 'pdf-clip'
     });
     
     setSelection(null);
     setIsClipping(false);
-  }, [selection, pageNumber, onClip]);
+  }, [selection, onClip]);
 
   const togglePageSelection = (pageNum: number) => {
     setSelectedPages(prev => {
@@ -251,6 +295,44 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
     });
   }, [file.name, onClip]);
 
+  const addAllPages = useCallback(() => {
+    if (numPages === 0) return;
+    
+    // Select all pages first
+    const all = new Set<number>();
+    for (let i = 1; i <= numPages; i++) all.add(i);
+    setSelectedPages(all);
+    
+    // We delay slightly to ensure DOM is updated and canvases are available
+    setTimeout(() => {
+      const pages = Array.from(all).sort((a: number, b: number) => a - b).map(pageNum => {
+        const thumbContainer = document.getElementById(`thumb-container-${pageNum}`);
+        const thumbCanvas = thumbContainer?.querySelector('canvas') as HTMLCanvasElement;
+        return {
+          imageUrl: thumbCanvas?.toDataURL('image/png', 0.95) || '',
+          label: `Page ${pageNum} from ${file.name}`,
+          aspectRatio: pageAspectRatios[pageNum] || (thumbCanvas ? thumbCanvas.width / thumbCanvas.height : 1)
+        };
+      }).filter(p => p.imageUrl);
+
+      onClip({
+        type: 'pdf-section',
+        pages,
+        text: `${file.name} - Full Document (${pages.length} pages)`
+      });
+
+      setSelectedPages(new Set());
+      setIsMultiSelectMode(false);
+    }, 100);
+  }, [numPages, file.name, pageAspectRatios, onClip]);
+
+  const scrollToPage = (pageNum: number) => {
+    const el = document.getElementById(`main-page-${pageNum}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-8 bg-slate-900/40 backdrop-blur-md">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden animate-in fade-in zoom-in duration-300 border border-white/20">
@@ -269,7 +351,7 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
             <div className="h-4 w-[1px] bg-slate-300" />
             <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-md p-0.5 shadow-sm">
               <button 
-                onClick={() => setPageNumber(p => Math.max(1, p - 1))}
+                onClick={() => scrollToPage(Math.max(1, pageNumber - 1))}
                 className="p-1 hover:bg-slate-50 rounded-sm disabled:opacity-30"
                 disabled={pageNumber <= 1}
               >
@@ -279,7 +361,7 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
                 {pageNumber} / {numPages || '-'}
               </span>
               <button 
-                onClick={() => setPageNumber(p => Math.min(numPages, p + 1))}
+                onClick={() => scrollToPage(Math.min(numPages, pageNumber + 1))}
                 className="p-1 hover:bg-slate-50 rounded-sm disabled:opacity-30"
                 disabled={pageNumber >= numPages}
               >
@@ -306,6 +388,14 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
                 <span>Confirm Selection</span>
               </button>
             )}
+
+            <div className="h-4 w-[1px] bg-slate-200" />
+            
+            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-md p-0.5 shadow-sm">
+                <button onClick={() => setScale(s => Math.max(0.4, s - 0.1))} className="p-1 hover:bg-slate-50 text-slate-500 rounded"><ZoomOut size={14} /></button>
+                <span className="text-[9px] font-mono w-10 text-center text-slate-400 font-bold">{Math.round(scale * 100)}%</span>
+                <button onClick={() => setScale(s => Math.min(2.5, s + 0.1))} className="p-1 hover:bg-slate-50 text-slate-500 rounded"><ZoomIn size={14} /></button>
+            </div>
 
             <div className="h-4 w-[1px] bg-slate-300 mx-1" />
             
@@ -336,13 +426,43 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
               </div>
 
               {isMultiSelectMode && (
+                <div className="flex flex-col gap-2 mb-4 shrink-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <button 
+                      onClick={() => {
+                        const all = new Set<number>();
+                        for (let i = 1; i <= numPages; i++) all.add(i);
+                        setSelectedPages(all);
+                      }}
+                      className="text-[9px] font-sans font-bold uppercase tracking-widest text-indigo-600 hover:underline"
+                    >
+                      Select All
+                    </button>
+                    <button 
+                      onClick={() => setSelectedPages(new Set())}
+                      className="text-[9px] font-sans font-bold uppercase tracking-widest text-slate-400 hover:underline"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <button 
+                    onClick={exportSection}
+                    disabled={selectedPages.size === 0}
+                    className="bg-indigo-600 text-white py-1.5 px-3 rounded text-[9px] font-bold uppercase tracking-widest shadow-sm hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-30 disabled:grayscale"
+                  >
+                    <Plus size={12} />
+                    Export {selectedPages.size} Selection
+                  </button>
+                </div>
+              )}
+
+              {!isMultiSelectMode && (
                 <button 
-                  onClick={exportSection}
-                  disabled={selectedPages.size === 0}
-                  className="bg-indigo-600 text-white py-1.5 px-3 rounded text-[9px] font-bold uppercase tracking-widest shadow-sm hover:bg-indigo-700 transition-all mb-4 flex items-center justify-center gap-2 disabled:opacity-30 disabled:grayscale"
+                  onClick={addAllPages}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-600 py-1.5 px-3 rounded text-[9px] font-bold uppercase tracking-widest transition-all mb-4 flex items-center justify-center gap-2 border border-slate-200"
                 >
                   <Plus size={12} />
-                  Export {selectedPages.size}
+                  Add All Pages to Map
                 </button>
               )}
 
@@ -360,13 +480,19 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
                       <div 
                         key={`thumb_${pageIdx}`}
                         id={`thumb-container-${pageIdx}`}
-                        onClick={() => isMultiSelectMode ? togglePageSelection(pageIdx) : setPageNumber(pageIdx)}
+                        onClick={() => {
+                          if (isMultiSelectMode) {
+                            togglePageSelection(pageIdx);
+                          } else {
+                            scrollToPage(pageIdx);
+                          }
+                        }}
                         className="flex flex-col items-center gap-2 group w-full cursor-pointer relative"
                       >
                         <div className={`relative w-[100px] transition-all bg-white shadow-sm ring-1 ring-black/5 overflow-hidden ${isActive ? 'ring-2 ring-indigo-500 shadow-indigo-100' : isSelected ? 'ring-2 ring-indigo-400 shadow-indigo-50' : 'hover:ring-black/10'}`}>
                           <Page 
                             pageNumber={pageIdx} 
-                            width={1200} // High resolution for crisp mapping/captures when sent to canvas
+                            width={300} 
                             className="pdf-thumbnail-page bg-white"
                             renderAnnotationLayer={false}
                             renderTextLayer={false}
@@ -408,36 +534,52 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
           )}
 
           {/* PDF Content */}
-          <div className="flex-1 overflow-auto bg-slate-100/80 flex flex-col items-center justify-start py-12 px-8 custom-scrollbar relative">
-            <div 
-              ref={containerRef}
-              className="relative cursor-crosshair select-none overflow-hidden bg-white shadow-[0_20px_50px_rgba(0,0,0,0.1)] ring-1 ring-slate-200 rounded-sm mb-12"
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-            >
+          <div 
+            ref={containerRef}
+            className="flex-1 overflow-auto bg-slate-100/80 flex flex-col items-center justify-start py-12 px-8 custom-scrollbar relative"
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+          >
             <Document
               file={file.content}
-              onLoadSuccess={onDocumentLoadSuccess}
+              onLoadSuccess={(data) => {
+                onDocumentLoadSuccess(data);
+                setDocumentRendered(true);
+              }}
               onLoadError={(error) => console.error('PDF Load Error:', error)}
               loading={<div className="p-20 text-center animate-pulse text-indigo-500 font-mono text-xs uppercase tracking-widest">Decoding Document Layer...</div>}
               error={<div className="p-20 text-center text-red-500 font-sans text-xs uppercase tracking-widest bg-red-50/50 rounded-lg border border-red-100 p-8">
                 <p className="font-bold mb-2">Access Denied / Network Error</p>
                 <p className="lowercase tracking-normal font-normal opacity-70">The document could not be fetched. This is usually due to CORS restrictions on the remote server. Try uploading a local PDF instead.</p>
               </div>}
+              className="flex flex-col gap-12 items-center"
             >
-              <Page 
-                pageNumber={pageNumber} 
-                scale={scale}
-                renderAnnotationLayer={false}
-                renderTextLayer={true}
-              />
+              {Array.from(new Array(numPages), (el, index) => {
+                const p = index + 1;
+                return (
+                  <div 
+                    key={p} 
+                    id={`main-page-${p}`}
+                    data-page-number={p}
+                    className="pdf-page-container relative bg-white shadow-[0_20px_50px_rgba(0,0,0,0.1)] ring-1 ring-slate-200 rounded-sm"
+                  >
+                    <Page 
+                      pageNumber={p} 
+                      scale={scale}
+                      renderAnnotationLayer={false}
+                      renderTextLayer={true}
+                      onLoadSuccess={(page) => onPageLoadSuccess(p, page)}
+                    />
+                  </div>
+                );
+              })}
             </Document>
 
             {/* Selection Box Overlay */}
             {selection && (
               <div 
-                className="absolute border-2 border-indigo-500 bg-indigo-500/10 pointer-events-none transition-all"
+                className="absolute border-2 border-indigo-500 bg-indigo-500/10 pointer-events-none transition-all z-20"
                 style={{
                   left: selection.x,
                   top: selection.y,
@@ -459,21 +601,6 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
             )}
           </div>
         </div>
-      </div>
-        
-      {/* Footer info */}
-        <footer className="h-10 border-t border-slate-100 bg-white px-6 flex items-center justify-between shrink-0 text-[9px] text-slate-400 font-bold tracking-[0.2em] uppercase">
-          <div className="flex items-center gap-2">
-             <div className="w-1.5 h-1.5 rounded-full bg-indigo-400"></div>
-             <span>Spatial Intelligence Engine v1.2</span>
-          </div>
-          <div>Drag crosshair to isolate evidence • Confirm to sync to workspace</div>
-          <div className="flex items-center gap-4">
-             <button onClick={() => setScale(s => s - 0.1)} className="hover:text-indigo-600 transition-colors">Zoom -</button>
-             <span className="text-slate-300 font-normal">|</span>
-             <button onClick={() => setScale(s => s + 0.1)} className="hover:text-indigo-600 transition-colors">Zoom +</button>
-          </div>
-        </footer>
       </div>
     </div>
   );

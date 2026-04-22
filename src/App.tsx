@@ -25,7 +25,8 @@ import {
   Eraser,
   Palette,
   Save,
-  Download
+  Download,
+  Grab
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { WorkspaceNode, WorkspaceEdge, PathData, ExplorerItem } from './types';
@@ -377,8 +378,8 @@ export default function App() {
   };
 
   // Drawing State
-  const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee'>('none');
-  const [currentColor, setCurrentColor] = useState('#4f46e5');
+  const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee' | 'hand'>('hand');
+  const [currentColor, setCurrentColor] = useState('#2563eb'); // Default to Blue
 
   const addNode = useCallback((type: 'idea' | 'note' | 'group') => {
     const id = uuidv4();
@@ -466,21 +467,29 @@ export default function App() {
           
           <div className="flex items-center gap-2 bg-slate-100/50 border border-slate-200 rounded-full p-1 px-1.5">
             <button 
-              onClick={() => { setDrawingTool('none'); addNode('note'); }}
+              onClick={() => setDrawingTool('hand')}
+              className={`p-2 rounded-full transition-all ${drawingTool === 'hand' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
+              title="Move & Select (Hand)"
+            >
+               <Grab size={18} />
+            </button>
+            <div className="w-px h-5 bg-slate-200 mx-1"></div>
+            <button 
+              onClick={() => { setDrawingTool('hand'); addNode('note'); }}
               className="p-2 hover:bg-white hover:shadow-sm rounded-full transition-all text-slate-600 group"
               title="Add Note"
             >
                <StickyNote size={18} className="group-hover:text-indigo-500 transition-colors" />
             </button>
             <button 
-              onClick={() => { setDrawingTool('none'); addNode('idea'); }}
+              onClick={() => { setDrawingTool('hand'); addNode('idea'); }}
               className="p-2 hover:bg-white hover:shadow-sm rounded-full transition-all text-slate-600 group"
               title="Add Idea"
             >
                <Type size={18} className="group-hover:text-indigo-500 transition-colors" />
             </button>
             <button 
-              onClick={() => { setDrawingTool('none'); addNode('group'); }}
+              onClick={() => { setDrawingTool('hand'); addNode('group'); }}
               className="p-2 hover:bg-white hover:shadow-sm rounded-full transition-all text-slate-600 group"
               title="Add Group"
             >
@@ -488,7 +497,7 @@ export default function App() {
             </button>
             <div className="w-px h-5 bg-slate-200 mx-1"></div>
             <button 
-              onClick={() => setDrawingTool(drawingTool === 'connector' ? 'none' : 'connector')}
+              onClick={() => setDrawingTool(drawingTool === 'connector' ? 'hand' : 'connector')}
               className={`p-2 rounded-full transition-all ${drawingTool === 'connector' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
               title="Connect objects by dragging handles"
             >
@@ -498,7 +507,7 @@ export default function App() {
 
           <div className="flex items-center gap-2 bg-slate-100/50 border border-slate-200 rounded-full p-1 px-1.5">
             <button 
-              onClick={() => setDrawingTool(drawingTool === 'marquee' ? 'none' : 'marquee')}
+              onClick={() => setDrawingTool(drawingTool === 'marquee' ? 'hand' : 'marquee')}
               className={`p-2 rounded-full transition-all ${drawingTool === 'marquee' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
               title="Marquee Selection (Click and drag to select multiple)"
             >
@@ -506,21 +515,21 @@ export default function App() {
             </button>
             <div className="h-4 w-[1px] bg-slate-200 mx-1" />
             <button 
-              onClick={() => setDrawingTool(drawingTool === 'pen' ? 'none' : 'pen')}
+              onClick={() => setDrawingTool(drawingTool === 'pen' ? 'hand' : 'pen')}
               className={`p-2 rounded-full transition-all ${drawingTool === 'pen' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
               title="Pen Tool"
             >
                <Pen size={16} />
             </button>
             <button 
-              onClick={() => setDrawingTool(drawingTool === 'highlighter' ? 'none' : 'highlighter')}
+              onClick={() => setDrawingTool(drawingTool === 'highlighter' ? 'hand' : 'highlighter')}
               className={`p-2 rounded-full transition-all ${drawingTool === 'highlighter' ? 'bg-yellow-400 text-slate-900 shadow-lg shadow-yellow-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
               title="Highlighter Tool"
             >
                <Highlighter size={16} />
             </button>
             <button 
-              onClick={() => setDrawingTool(drawingTool === 'eraser' ? 'none' : 'eraser')}
+              onClick={() => setDrawingTool(drawingTool === 'eraser' ? 'hand' : 'eraser')}
               className={`p-2 rounded-full transition-all ${drawingTool === 'eraser' ? 'bg-red-500 text-white shadow-lg shadow-red-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
               title="Eraser Tool"
             >
@@ -529,7 +538,7 @@ export default function App() {
             
             {drawingTool !== 'none' && drawingTool !== 'eraser' && (
               <div className="flex items-center gap-1.5 px-2">
-                {['#4f46e5', '#ef4444', '#10b981', '#000000'].map(color => (
+                {['#eab308', '#ef4444', '#2563eb', '#10b981'].map(color => (
                   <button 
                     key={color}
                     onClick={() => setCurrentColor(color)}
@@ -606,13 +615,14 @@ export default function App() {
             if (clip.type === 'pdf-section' && clip.pages) {
               const groupId = uuidv4();
               
-              const pageNodes: WorkspaceNode[] = clip.pages.map((p, idx) => {
+              let currentY = 80;
+              const pageNodes: WorkspaceNode[] = clip.pages.map((p) => {
                 const width = 600; // Actual document size for the canvas map
                 const height = width / (p.aspectRatio || 0.707);
-                return {
+                const node: WorkspaceNode = {
                   id: uuidv4(),
                   type: 'pdfPage',
-                  position: { x: 40 + (idx * (width + 40)), y: 80 },
+                  position: { x: 40, y: currentY },
                   parentId: groupId,
                   extent: 'parent',
                   style: { width, height },
@@ -623,6 +633,8 @@ export default function App() {
                     aspectRatio: p.aspectRatio
                   }
                 };
+                currentY += height + 40; // Add page height + vertical gap
+                return node;
               });
 
               const groupNode: WorkspaceNode = {
@@ -630,8 +642,8 @@ export default function App() {
                 type: 'group',
                 position: { x: 100, y: 100 },
                 style: { 
-                  width: pageNodes.length * 640 + 40, 
-                  height: Math.max(...pageNodes.map(n => (n.style?.height as number) || 0)) + 120 
+                  width: 680, 
+                  height: currentY + 40 // Final calculated height with bottom padding
                 },
                 data: { label: clip.text || 'Document Section', type: 'group' }
               };

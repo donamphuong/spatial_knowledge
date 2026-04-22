@@ -54,7 +54,7 @@ interface ExplorerTreeItemProps {
   depth?: number;
 }
 
-const ExplorerTreeItem = ({ 
+const ExplorerTreeItem = React.memo(({ 
   item, 
   items, 
   activeMapId, 
@@ -66,7 +66,9 @@ const ExplorerTreeItem = ({
 }: ExplorerTreeItemProps) => {
   const [isOpen, setIsOpen] = useState(true);
   const [isRenaming, setIsRenaming] = useState(false);
-  const children = items.filter(i => i.parentId === item.id);
+  
+  // Optimization: use memo to filter children only when items change
+  const children = React.useMemo(() => items.filter(i => i.parentId === item.id), [items, item.id]);
   const isFolder = item.type === 'folder';
   const isActive = item.type === 'map' && activeMapId === item.id;
 
@@ -196,9 +198,9 @@ const ExplorerTreeItem = ({
       ))}
     </div>
   );
-};
+});
 
-export default function Sidebar({ 
+const Sidebar = React.memo(({ 
   items, 
   activeMapId, 
   vaultName,
@@ -209,8 +211,8 @@ export default function Sidebar({
   onMoveItem,
   onCreateItem,
   onUpload
-}: SidebarProps) {
-  const rootItems = items.filter(i => !i.parentId);
+}: SidebarProps) => {
+  const rootItems = React.useMemo(() => items.filter(i => !i.parentId), [items]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -325,4 +327,6 @@ export default function Sidebar({
       </div>
     </aside>
   );
-}
+});
+
+export default Sidebar;
