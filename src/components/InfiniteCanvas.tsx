@@ -311,7 +311,7 @@ interface InfiniteCanvasProps {
   setEdges: React.Dispatch<React.SetStateAction<WorkspaceEdge[]>>;
   paths: PathData[];
   setPaths: React.Dispatch<React.SetStateAction<PathData[]>>;
-  drawingTool: 'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee' | 'hand';
+  drawingTool: 'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee' | 'hand' | 'group';
   currentColor: string;
 }
 
@@ -340,34 +340,60 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
   const { screenToFlowPosition } = useReactFlow();
   const { x, y, zoom } = useViewport();
   const [currentPath, setCurrentPath] = useState<number[][] | null>(null);
+  const [groupStart, setGroupStart] = useState<{ x: number, y: number } | null>(null);
+  const [groupCurrent, setGroupCurrent] = useState<{ x: number, y: number } | null>(null);
   const isDrawing = drawingTool === 'pen' || drawingTool === 'highlighter';
 
   const onMouseDown = useCallback((event: React.MouseEvent) => {
-    if (!isDrawing) return;
     const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    setCurrentPath([[position.x, position.y, event.pressure || 0.5]]);
-  }, [isDrawing, screenToFlowPosition]);
+    if (isDrawing) {
+      setCurrentPath([[position.x, position.y, event.pressure || 0.5]]);
+    } else if (drawingTool === 'group') {
+      setGroupStart(position);
+      setGroupCurrent(position);
+    }
+  }, [isDrawing, drawingTool, screenToFlowPosition]);
 
   const onMouseMove = useCallback((event: React.MouseEvent) => {
-    if (!currentPath) return;
     const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    setCurrentPath([...currentPath, [position.x, position.y, event.pressure || 0.5]]);
-  }, [currentPath, screenToFlowPosition]);
+    if (currentPath) {
+      setCurrentPath([...currentPath, [position.x, position.y, event.pressure || 0.5]]);
+    } else if (groupStart) {
+      setGroupCurrent(position);
+    }
+  }, [currentPath, groupStart, screenToFlowPosition]);
 
   const onMouseUp = useCallback(() => {
-    if (!currentPath) return;
+    if (currentPath) {
+      const newPath: PathData = {
+        id: uuidv4(),
+        points: currentPath,
+        color: currentColor,
+        width: drawingTool === 'pen' ? 2 : 12,
+        opacity: drawingTool === 'pen' ? 1 : 0.4
+      };
 
-    const newPath: PathData = {
-      id: uuidv4(),
-      points: currentPath,
-      color: currentColor,
-      width: drawingTool === 'pen' ? 2 : 12,
-      opacity: drawingTool === 'pen' ? 1 : 0.4
-    };
+      setPaths(prev => [...prev, newPath]);
+      setCurrentPath(null);
+    } else if (groupStart && groupCurrent) {
+      const x = Math.min(groupStart.x, groupCurrent.x);
+      const y = Math.min(groupStart.y, groupCurrent.y);
+      const width = Math.abs(groupStart.x - groupCurrent.x);
+      const height = Math.abs(groupStart.y - groupCurrent.y);
 
-    setPaths(prev => [...prev, newPath]);
-    setCurrentPath(null);
-  }, [currentPath, currentColor, drawingTool, setPaths]);
+      if (width > 20 && height > 20) {
+        setNodes(nds => [...nds, {
+          id: uuidv4(),
+          type: 'group',
+          position: { x, y },
+          style: { width, height },
+          data: { label: 'New Conceptual Group', type: 'group' }
+        }]);
+      }
+      setGroupStart(null);
+      setGroupCurrent(null);
+    }
+  }, [currentPath, groupStart, groupCurrent, currentColor, drawingTool, setPaths, setNodes]);
 
   const onPathClick = useCallback((id: string, e: React.MouseEvent) => {
     if (drawingTool === 'eraser') {
@@ -402,7 +428,7 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
   };
 
   return (
-    <div className={`w-full h-full relative overflow-hidden ${isDrawing ? 'cursor-crosshair' : drawingTool === 'eraser' ? 'eraser-mode active cursor-crosshair' : drawingTool === 'hand' ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`}>
+    <div className={`w-full h-full relative overflow-hidden ${isDrawing || drawingTool === 'group' ? 'cursor-crosshair' : drawingTool === 'eraser' ? 'eraser-mode active cursor-crosshair' : drawingTool === 'hand' ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -425,12 +451,12 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
       >
         <Background gap={32} size={1} color="#e2e8f0" />
         
-        <Panel position="top-left" className={`${isDrawing ? 'pointer-events-auto' : 'pointer-events-none'} !m-0 w-full h-full z-50`}>
+        <Panel position="top-left" className={`${isDrawing || drawingTool === 'group' ? 'pointer-events-auto' : 'pointer-events-none'} !m-0 w-full h-full z-50`}>
           <svg 
              onMouseDown={onMouseDown}
              onMouseMove={onMouseMove}
              onMouseUp={onMouseUp}
-             className={`w-full h-full overflow-visible ${isDrawing ? 'pointer-events-auto' : 'pointer-events-none'}`}
+             className={`w-full h-full overflow-visible ${isDrawing || drawingTool === 'group' ? 'pointer-events-auto' : 'pointer-events-none'}`}
              style={{ transformOrigin: '0 0' }}
           >
              <g transform={`translate(${x},${y}) scale(${zoom})`}>
@@ -455,6 +481,20 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
                     opacity={drawingTool === 'pen' ? 1 : 0.4}
                   />
                 )}
+
+                {groupStart && groupCurrent && (
+                  <rect
+                    x={Math.min(groupStart.x, groupCurrent.x)}
+                    y={Math.min(groupStart.y, groupCurrent.y)}
+                    width={Math.abs(groupStart.x - groupCurrent.x)}
+                    height={Math.abs(groupStart.y - groupCurrent.y)}
+                    fill="rgba(79, 70, 229, 0.1)"
+                    stroke="#4f46e5"
+                    strokeWidth={2 / zoom}
+                    strokeDasharray={`${4 / zoom}, ${4 / zoom}`}
+                    rx={8 / zoom}
+                  />
+                )}
              </g>
           </svg>
         </Panel>
@@ -467,8 +507,6 @@ function CanvasInner({ nodes, edges, setNodes, setEdges, paths, setPaths, drawin
 
 export default function InfiniteCanvas(props: InfiniteCanvasProps) {
   return (
-    <ReactFlowProvider>
-      <CanvasInner {...props} />
-    </ReactFlowProvider>
+    <CanvasInner {...props} />
   );
 }

@@ -13,7 +13,10 @@ import {
   StickyNote,
   HardDrive,
   Link,
-  Settings
+  Settings,
+  BoxSelect,
+  Maximize2,
+  Edit3
 } from 'lucide-react';
 import { ExplorerItem } from '../types';
 import { 
@@ -40,6 +43,9 @@ interface SidebarProps {
   onMoveItem: (id: string, newParentId: string | null) => void;
   onCreateItem: (type: 'folder' | 'map' | 'pdf' | 'note', parentId: string | null) => void;
   onUpload: () => void;
+  nodes?: any[];
+  onFocusNode?: (nodeId: string) => void;
+  onRenameNode?: (nodeId: string, name: string) => void;
 }
 
 interface ExplorerTreeItemProps {
@@ -200,6 +206,112 @@ const ExplorerTreeItem = React.memo(({
   );
 });
 
+const MapOutlineItem = React.memo(({ 
+  node, 
+  allNodes, 
+  depth = 0, 
+  onFocusNode, 
+  onRenameNode 
+}: { 
+  node: any, 
+  allNodes: any[], 
+  depth?: number, 
+  onFocusNode?: (nodeId: string) => void,
+  onRenameNode?: (nodeId: string, name: string) => void
+}) => {
+  const [isRenaming, setIsRenaming] = useState(false);
+  
+  // Use a combination of explicit parentId and visual containment for the sidebar hierarchy
+  const children = React.useMemo(() => {
+    return allNodes.filter(n => {
+      // Direct child in React Flow
+      if (n.parentId === node.id) return true;
+      
+      // Visual containment check for nodes that don't have an explicit parent
+      if (!n.parentId && node.type === 'group') {
+        const nx = n.position.x;
+        const ny = n.position.y;
+        const gx = node.position.x;
+        const gy = node.position.y;
+        const gw = node.style?.width || 100;
+        const gh = node.style?.height || 100;
+
+        // Consider node inside if its top-left is within group boundaries
+        return nx >= gx && nx <= gx + gw && ny >= gy && ny <= gy + gh;
+      }
+      return false;
+    });
+  }, [allNodes, node.id, node.type, node.position, node.style]);
+
+  const hasChildren = children.length > 0;
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsRenaming(true);
+  };
+
+  const Icon = () => {
+    switch (node.type) {
+      case 'group': return <BoxSelect size={12} className="text-indigo-400" />;
+      case 'pdfPage': return <FileText size={12} className="text-rose-400" />;
+      case 'note': return <StickyNote size={12} className="text-amber-400" />;
+      default: return <Edit3 size={12} className="text-emerald-400" />;
+    }
+  };
+
+  return (
+    <div className="flex flex-col">
+      <div 
+        className={`flex items-center gap-2 px-2 py-1.5 text-left hover:bg-slate-50 rounded-md transition-all group border border-transparent hover:border-slate-100 mx-1 ${depth > 0 ? 'ml-4' : ''}`}
+        onClick={() => onFocusNode?.(node.id)}
+        onContextMenu={handleContextMenu}
+      >
+        <div className="shrink-0 w-6 h-6 rounded flex items-center justify-center bg-white shadow-sm border border-slate-100">
+          <Icon />
+        </div>
+        
+        {isRenaming ? (
+          <input 
+            autoFocus
+            defaultValue={node.data?.label}
+            className="text-[10px] font-medium bg-white border border-indigo-200 rounded px-1 w-full outline-none ring-1 ring-indigo-300"
+            onBlur={(e) => {
+              onRenameNode?.(node.id, e.target.value);
+              setIsRenaming(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                onRenameNode?.(node.id, e.currentTarget.value);
+                setIsRenaming(false);
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="text-[10px] font-medium text-slate-600 truncate group-hover:text-slate-900 transition-colors flex-1">
+            {node.data?.label || 'Untitled Element'}
+          </span>
+        )}
+      </div>
+      
+      {hasChildren && (
+        <div className="flex flex-col">
+          {children.map(child => (
+            <MapOutlineItem 
+              key={child.id} 
+              node={child} 
+              allNodes={allNodes} 
+              depth={depth + 1} 
+              onFocusNode={onFocusNode}
+              onRenameNode={onRenameNode}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
 const Sidebar = React.memo(({ 
   items, 
   activeMapId, 
@@ -210,9 +322,34 @@ const Sidebar = React.memo(({
   onRenameItem,
   onMoveItem,
   onCreateItem,
-  onUpload
+  onUpload,
+  nodes = [],
+  onFocusNode,
+  onRenameNode
 }: SidebarProps) => {
   const rootItems = React.useMemo(() => items.filter(i => !i.parentId), [items]);
+  const rootNodes = React.useMemo(() => {
+    return nodes.filter(n => {
+      // If it has an explicit parent, it's not root
+      if (n.parentId) return false;
+      
+      // Visual containment check: if n is inside any group, it shouldn't be a root item
+      const isVisuallyParented = nodes.some(group => {
+        if (group.id === n.id || group.type !== 'group') return false;
+        
+        const nx = n.position.x;
+        const ny = n.position.y;
+        const gx = group.position.x;
+        const gy = group.position.y;
+        const gw = group.style?.width || 100;
+        const gh = group.style?.height || 100;
+
+        return nx >= gx && nx <= gx + gw && ny >= gy && ny <= gy + gh;
+      });
+
+      return !isVisuallyParented;
+    });
+  }, [nodes]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -313,6 +450,29 @@ const Sidebar = React.memo(({
               onCreateItem={onCreateItem}
             />
           ))}
+
+          {activeMapId && nodes.length > 0 && (
+            <div className="mt-8 mb-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
+              <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2 mx-2">
+                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                  <Maximize2 size={10} /> Map Outline
+                </h3>
+                <span className="text-[9px] font-mono font-bold bg-indigo-50 text-indigo-500 px-2 py-0.5 rounded-full">{nodes.length}</span>
+              </div>
+              
+              <div className="flex flex-col gap-0.5">
+                {rootNodes.map(node => (
+                  <MapOutlineItem 
+                    key={node.id} 
+                    node={node} 
+                    allNodes={nodes} 
+                    onFocusNode={onFocusNode}
+                    onRenameNode={onRenameNode}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </DndContext>
 

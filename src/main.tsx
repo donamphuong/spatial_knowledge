@@ -21,8 +21,12 @@ window.addEventListener('unhandledrejection', (e) => {
   }
 });
 
+import { ReactFlowProvider } from '@xyflow/react';
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ReactFlowProvider>
+      <App />
+    </ReactFlowProvider>
   </StrictMode>,
 );

@@ -29,6 +29,7 @@ import {
   Grab
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
+import { useReactFlow } from '@xyflow/react';
 import { WorkspaceNode, WorkspaceEdge, PathData, ExplorerItem } from './types';
 import InfiniteCanvas from './components/InfiniteCanvas';
 import PDFViewerModal from './components/PDFViewerModal';
@@ -378,8 +379,23 @@ export default function App() {
   };
 
   // Drawing State
-  const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee' | 'hand'>('hand');
+  const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee' | 'hand' | 'group'>('hand');
   const [currentColor, setCurrentColor] = useState('#2563eb'); // Default to Blue
+
+  const { getNodes, setCenter } = useReactFlow();
+
+  const onFocusNode = useCallback((nodeId: string) => {
+    const nodes = getNodes();
+    const node = nodes.find(n => n.id === nodeId);
+    if (node) {
+      // Focus on the top-left of the node with some zoom
+      setCenter(node.position.x + 50, node.position.y + 50, { zoom: 0.8, duration: 800 });
+    }
+  }, [getNodes, setCenter]);
+
+  const onRenameNode = useCallback((nodeId: string, name: string) => {
+    setNodes((nds) => nds.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, label: name } } : node));
+  }, [setNodes]);
 
   const addNode = useCallback((type: 'idea' | 'note' | 'group') => {
     const id = uuidv4();
@@ -439,6 +455,9 @@ export default function App() {
         onMoveItem={onMoveItem}
         onCreateItem={onCreateItem}
         onUpload={() => document.getElementById('pdf-upload')?.click()}
+        nodes={activeMapData.nodes}
+        onFocusNode={onFocusNode}
+        onRenameNode={onRenameNode}
       />
       <input id="pdf-upload" type="file" accept=".pdf" className="hidden" onChange={onFileUpload} />
 
@@ -489,11 +508,11 @@ export default function App() {
                <Type size={18} className="group-hover:text-indigo-500 transition-colors" />
             </button>
             <button 
-              onClick={() => { setDrawingTool('hand'); addNode('group'); }}
-              className="p-2 hover:bg-white hover:shadow-sm rounded-full transition-all text-slate-600 group"
-              title="Add Group"
+              onClick={() => setDrawingTool(drawingTool === 'group' ? 'hand' : 'group')}
+              className={`p-2 rounded-full transition-all ${drawingTool === 'group' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
+              title="Drag to create Group"
             >
-               <BoxSelect size={18} className="group-hover:text-indigo-500 transition-colors" />
+               <BoxSelect size={18} className={drawingTool === 'group' ? 'text-white' : 'group-hover:text-indigo-500 transition-colors'} />
             </button>
             <div className="w-px h-5 bg-slate-200 mx-1"></div>
             <button 
