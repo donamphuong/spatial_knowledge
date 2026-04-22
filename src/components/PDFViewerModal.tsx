@@ -295,37 +295,6 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
     });
   }, [file.name, onClip]);
 
-  const addAllPages = useCallback(() => {
-    if (numPages === 0) return;
-    
-    // Select all pages first
-    const all = new Set<number>();
-    for (let i = 1; i <= numPages; i++) all.add(i);
-    setSelectedPages(all);
-    
-    // We delay slightly to ensure DOM is updated and canvases are available
-    setTimeout(() => {
-      const pages = Array.from(all).sort((a: number, b: number) => a - b).map(pageNum => {
-        const thumbContainer = document.getElementById(`thumb-container-${pageNum}`);
-        const thumbCanvas = thumbContainer?.querySelector('canvas') as HTMLCanvasElement;
-        return {
-          imageUrl: thumbCanvas?.toDataURL('image/png', 0.95) || '',
-          label: `Page ${pageNum} from ${file.name}`,
-          aspectRatio: pageAspectRatios[pageNum] || (thumbCanvas ? thumbCanvas.width / thumbCanvas.height : 1)
-        };
-      }).filter(p => p.imageUrl);
-
-      onClip({
-        type: 'pdf-section',
-        pages,
-        text: `${file.name} - Full Document (${pages.length} pages)`
-      });
-
-      setSelectedPages(new Set());
-      setIsMultiSelectMode(false);
-    }, 100);
-  }, [numPages, file.name, pageAspectRatios, onClip]);
-
   const scrollToPage = (pageNum: number) => {
     const el = document.getElementById(`main-page-${pageNum}`);
     if (el) {
@@ -454,16 +423,6 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
                     Export {selectedPages.size} Selection
                   </button>
                 </div>
-              )}
-
-              {!isMultiSelectMode && (
-                <button 
-                  onClick={addAllPages}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-600 py-1.5 px-3 rounded text-[9px] font-bold uppercase tracking-widest transition-all mb-4 flex items-center justify-center gap-2 border border-slate-200"
-                >
-                  <Plus size={12} />
-                  Add All Pages to Map
-                </button>
               )}
 
               <Document

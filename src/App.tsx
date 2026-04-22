@@ -624,7 +624,6 @@ export default function App() {
                   type: 'pdfPage',
                   position: { x: 40, y: currentY },
                   parentId: groupId,
-                  extent: 'parent',
                   style: { width, height },
                   data: {
                     label: p.label,
