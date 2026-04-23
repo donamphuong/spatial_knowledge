@@ -312,32 +312,37 @@ const Sidebar = React.memo(({
     const nodeMap = new Map<string, any>();
     const roots: any[] = [];
     
-    // Only include groups in the outline
-    const groupNodes = deferredNodes.filter(n => n.type === 'group');
+    // Include all groups, plus any nodes that have an explicit parent
+    const visibleInOutline = deferredNodes.filter(n => 
+      n.type === 'group' || !!n.parentId
+    );
 
-    // Pass 1: Initialize all group nodes in the map with empty children
-    groupNodes.forEach(n => {
+    // Pass 1: Initialize all potentially visible nodes in the map
+    visibleInOutline.forEach(n => {
       nodeMap.set(n.id, { ...n, treeChildren: [] });
     });
 
-    // Pass 2: Build the hierarchy based on parentId or visual containment (group-to-group only)
-    groupNodes.forEach(n => {
+    // Pass 2: Build the hierarchy
+    visibleInOutline.forEach(n => {
       const nodeInTree = nodeMap.get(n.id);
       
-      // 1. Check for explicit parent (if parent is also a group)
+      // 1. Check for explicit parent
       if (n.parentId && nodeMap.has(n.parentId)) {
         nodeMap.get(n.parentId).treeChildren.push(nodeInTree);
         return;
       }
 
-      // 2. Check for visual containment if no explicit parent exists
-      if (!n.parentId) {
+      // 2. Visual containment check (Group-to-Group only for roots)
+      // Only groups can be roots in our "Group Hierarchy" view
+      if (!n.parentId && n.type === 'group') {
         let visualParentId: string | null = null;
         
-        // Only groups can be visual parents
-        const groups = groupNodes.filter(potParent => potParent.id !== n.id);
+        // Find if this group is inside another group
+        const otherGroups = visibleInOutline.filter(potParent => 
+          potParent.type === 'group' && potParent.id !== n.id
+        );
 
-        for (const group of groups) {
+        for (const group of otherGroups) {
           const nx = n.position.x;
           const ny = n.position.y;
           const gx = group.position.x;
@@ -355,10 +360,12 @@ const Sidebar = React.memo(({
           nodeMap.get(visualParentId).treeChildren.push(nodeInTree);
           return;
         }
+        
+        // If it's a group and has no visual parent, it's a root
+        roots.push(nodeInTree);
       }
-
-      // 3. If no parent found, it's a root node
-      roots.push(nodeInTree);
+      
+      // Notes/Syntheses that have no parent are NOT shown at root level
     });
 
     return roots;

@@ -26,7 +26,8 @@ import {
   Palette,
   Save,
   Download,
-  Grab
+  Grab,
+  Image as ImageIcon
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { useReactFlow } from '@xyflow/react';
@@ -162,6 +163,8 @@ const getFileContent = async (id: string, directoryHandle?: FileSystemDirectoryH
 };
 
 export default function App() {
+  const { getNodes, setCenter, screenToFlowPosition } = useReactFlow();
+  
   const [items, setItems] = useState<ExplorerItem[]>([]);
   const [activeMapId, setActiveMapId] = useState<string>(DEFAULT_ITEMS[0].id);
   const [activeMapData, setActiveMapData] = useState<WorkspaceContent>({ nodes: [], edges: [], paths: [] });
@@ -170,6 +173,19 @@ export default function App() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [directoryHandle, setDirectoryHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [vaultName, setVaultName] = useState<string | null>(null);
+
+  // Drawing State
+  const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee' | 'hand' | 'group'>('hand');
+  const [currentColor, setCurrentColor] = useState('#2563eb'); // Default to Blue
+  const [penWidth, setPenWidth] = useState(2);
+  const [highlighterWidth, setHighlighterWidth] = useState(12);
+
+  // Undo/Redo History Stacks
+  const [history, setHistory] = useState<WorkspaceContent[]>([]);
+  const [redoStack, setRedoStack] = useState<WorkspaceContent[]>([]);
+  
+  // Local Clipboard for Nodes/Edges
+  const [clipboard, setClipboard] = useState<{ nodes: WorkspaceNode[], edges: WorkspaceEdge[] } | null>(null);
   
   const activeMap = items.find(i => i.id === activeMapId) || items[0] || DEFAULT_ITEMS[0];
 
@@ -255,12 +271,24 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [items, activeMapData, activeMapId, isInitialLoad, directoryHandle]);
 
-  // State setters that ONLY modify the active chunk
+  // State setters that ONLY modify the active chunk - with History tracking
+  const pushToHistory = useCallback((content: WorkspaceContent) => {
+    setHistory(prev => {
+      const newHistory = [...prev, content];
+      if (newHistory.length > 50) newHistory.shift(); // Max 50 undo steps
+      return newHistory;
+    });
+    setRedoStack([]); // Clear redo on new action
+  }, []);
+
   const setNodes = useCallback((update: WorkspaceNode[] | ((nds: WorkspaceNode[]) => WorkspaceNode[])) => {
-    setActiveMapData(prev => ({
-      ...prev,
-      nodes: typeof update === 'function' ? update(prev.nodes || []) : update
-    }));
+    setActiveMapData(prev => {
+      const nextNodes = typeof update === 'function' ? update(prev.nodes || []) : update;
+      // Reference-level check is usually sufficient for React Flow
+      if (nextNodes === prev.nodes) return prev;
+      
+      return { ...prev, nodes: nextNodes };
+    });
   }, []);
 
   const setEdges = useCallback((update: WorkspaceEdge[] | ((eds: WorkspaceEdge[]) => WorkspaceEdge[])) => {
@@ -276,6 +304,185 @@ export default function App() {
       paths: typeof update === 'function' ? update(prev.paths || []) : update
     }));
   }, []);
+
+  const onUndo = useCallback(() => {
+    if (history.length === 0) return;
+    const previous = history[history.length - 1];
+    setRedoStack(prev => [...prev, activeMapData]);
+    setHistory(prev => prev.slice(0, -1));
+    setActiveMapData(previous);
+  }, [history, activeMapData]);
+
+  const onRedo = useCallback(() => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setHistory(prev => [...prev, activeMapData]);
+    setRedoStack(prev => prev.slice(0, -1));
+    setActiveMapData(next);
+  }, [redoStack, activeMapData]);
+
+  const onSnapshot = useCallback(() => {
+    pushToHistory(activeMapData);
+  }, [activeMapData, pushToHistory]);
+
+  const addTextNode = useCallback((text: string) => {
+    onSnapshot();
+    const id = uuidv4();
+    const center = screenToFlowPosition({ 
+      x: window.innerWidth / 2 + 128, 
+      y: window.innerHeight / 2 
+    });
+
+    const newNode: WorkspaceNode = {
+      id,
+      type: 'idea',
+      position: { x: center.x - 110, y: center.y - 110 },
+      data: { 
+        label: text || '', 
+        type: 'idea' 
+      }
+    };
+    setNodes((nds) => [...nds, newNode]);
+    setDrawingTool('hand');
+  }, [setNodes, screenToFlowPosition, onSnapshot, setDrawingTool]);
+
+  const addImageNode = useCallback((imageUrl: string, aspectRatio: number = 1) => {
+    onSnapshot();
+    const id = uuidv4();
+    const center = screenToFlowPosition({ 
+      x: window.innerWidth / 2 + 128, 
+      y: window.innerHeight / 2 
+    });
+
+    const width = 400;
+    const height = width / (aspectRatio || 1);
+
+    const newNode: WorkspaceNode = {
+      id,
+      type: 'image',
+      position: { x: center.x - width/2, y: center.y - height/2 },
+      style: { width, height },
+      data: { 
+        label: 'Uploaded Image', 
+        type: 'image',
+        imageUrl
+      }
+    };
+    setNodes((nds) => [...nds, newNode]);
+    setDrawingTool('hand');
+  }, [setNodes, screenToFlowPosition, onSnapshot, setDrawingTool]);
+
+  const uploadImage = useCallback((file: File) => {
+    if (file && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const imageUrl = event.target?.result as string;
+        const img = new Image();
+        img.onload = () => {
+          addImageNode(imageUrl, img.width / img.height);
+        };
+        img.src = imageUrl;
+      };
+      reader.readAsDataURL(file);
+    }
+  }, [addImageNode]);
+
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      // Don't paste if focusing on input/textarea
+      if (
+        document.activeElement?.tagName === 'INPUT' || 
+        document.activeElement?.tagName === 'TEXTAREA' || 
+        (document.activeElement as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+
+      // If we have internal clipboard (nodes/edges), that takes priority during Ctrl+V
+      // But wait, keydown handles internal onPaste. If we are here, we might want to check
+      // if it was a system paste. 
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      let handledExternally = false;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          const file = items[i].getAsFile();
+          if (file) {
+            uploadImage(file);
+            handledExternally = true;
+          }
+        } else if (items[i].type === 'text/plain') {
+          // Check if it's our internal JSON format first? No, we use local state for internal.
+          // If we have internal nodes, we might want to skip this if they were pasted by keydown.
+          // BUT keydown on 'v' will trigger this paste event too.
+          
+          if (!clipboard) {
+            items[i].getAsString((text) => {
+              if (text) {
+                // If the text looks like our internal JSON, it might be a cross-tab paste
+                // but for now let's just stick to synthesis creation for external text.
+                addTextNode(text);
+              }
+            });
+            handledExternally = true;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [clipboard, addTextNode, uploadImage]);
+
+  const onCopy = useCallback((selectedNodes: WorkspaceNode[]) => {
+    if (selectedNodes.length === 0) return;
+    const nodeIds = new Set(selectedNodes.map(n => n.id));
+    const relatedEdges = activeMapData.edges?.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)) || [];
+    setClipboard({ nodes: selectedNodes, edges: relatedEdges });
+  }, [activeMapData.edges]);
+
+  const onPaste = useCallback(() => {
+    if (!clipboard) return;
+    onSnapshot();
+    
+    // Use the viewport center for pasting
+    const center = screenToFlowPosition({ 
+      x: window.innerWidth / 2 + 128, 
+      y: window.innerHeight / 2 
+    });
+
+    // Calculate center of clipboard nodes to maintain relative positions
+    const minX = Math.min(...clipboard.nodes.map(n => n.position.x));
+    const minY = Math.min(...clipboard.nodes.map(n => n.position.y));
+    
+    const idMap = new Map<string, string>();
+    const newNodes = clipboard.nodes.map(n => {
+      const newId = uuidv4();
+      idMap.set(n.id, newId);
+      return {
+        ...n,
+        id: newId,
+        position: {
+          x: n.position.x - minX + center.x - 50,
+          y: n.position.y - minY + center.y - 50
+        },
+        selected: true
+      };
+    });
+
+    const newEdges = clipboard.edges.map(e => ({
+      ...e,
+      id: uuidv4(),
+      source: idMap.get(e.source) || e.source,
+      target: idMap.get(e.target) || e.target,
+      selected: false
+    }));
+
+    setNodes(nds => [...nds.map(n => ({ ...n, selected: false })), ...newNodes]);
+    setEdges(eds => [...eds, ...newEdges]);
+    setDrawingTool('hand');
+  }, [clipboard, screenToFlowPosition, setNodes, setEdges, onSnapshot, setDrawingTool]);
 
   // Logic to resolve PDF content on selection
   const [activePdf, setActivePdf] = useState<ExplorerItem | null>(null);
@@ -381,12 +588,6 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  // Drawing State
-  const [drawingTool, setDrawingTool] = useState<'none' | 'pen' | 'highlighter' | 'eraser' | 'connector' | 'marquee' | 'hand' | 'group'>('hand');
-  const [currentColor, setCurrentColor] = useState('#2563eb'); // Default to Blue
-
-  const { getNodes, setCenter } = useReactFlow();
-
   const onFocusNode = useCallback((nodeId: string) => {
     const nodes = getNodes();
     const node = nodes.find(n => n.id === nodeId);
@@ -401,30 +602,38 @@ export default function App() {
   }, [setNodes]);
 
   const addNode = useCallback((type: 'idea' | 'note' | 'group') => {
+    onSnapshot();
     const id = uuidv4();
     let newNode: WorkspaceNode;
+
+    // Use screenToFlowPosition to spawn in the center of the viewport
+    const center = screenToFlowPosition({ 
+      x: window.innerWidth / 2 + 128, // Accounting for sidebar offset
+      y: window.innerHeight / 2 
+    });
 
     if (type === 'group') {
       newNode = {
         id,
         type: 'group',
-        position: { x: 100, y: 100 },
-        style: { width: 400, height: 300 },
+        position: { x: center.x - 200, y: center.y - 150 },
+        style: { width: 400, height: 300, zIndex: -1 },
         data: { label: 'Conceptual Group', type: 'group' }
       };
     } else {
       newNode = {
         id,
         type,
-        position: { x: Math.random() * 400, y: Math.random() * 400 },
+        position: { x: center.x - 100, y: center.y - 120 },
         data: { 
-          label: type === 'idea' ? 'Research Synthesis' : 'New Annotation', 
+          label: '', 
           type 
         }
       };
     }
     setNodes((nds) => [...nds, newNode]);
-  }, [setNodes]);
+    setDrawingTool('hand');
+  }, [setNodes, screenToFlowPosition, onSnapshot, setDrawingTool]);
 
   const onFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -463,6 +672,10 @@ export default function App() {
         onRenameNode={onRenameNode}
       />
       <input id="pdf-upload" type="file" accept=".pdf" className="hidden" onChange={onFileUpload} />
+      <input id="image-upload" type="file" accept="image/*" className="hidden" onChange={(e) => {
+        const file = e.target.files?.[0];
+        if (file) uploadImage(file);
+      }} />
 
       {/* Main Content Area */}
       <main className="flex-1 relative flex flex-col min-w-0">
@@ -511,6 +724,13 @@ export default function App() {
                <Type size={18} className="group-hover:text-indigo-500 transition-colors" />
             </button>
             <button 
+              onClick={() => document.getElementById('image-upload')?.click()}
+              className="p-2 hover:bg-white hover:shadow-sm rounded-full transition-all text-slate-600 group"
+              title="Upload Image"
+            >
+               <ImageIcon size={18} className="group-hover:text-indigo-500 transition-colors" />
+            </button>
+            <button 
               onClick={() => setDrawingTool(drawingTool === 'group' ? 'hand' : 'group')}
               className={`p-2 rounded-full transition-all ${drawingTool === 'group' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
               title="Drag to create Group"
@@ -536,6 +756,27 @@ export default function App() {
                <MousePointer2 size={16} />
             </button>
             <div className="h-4 w-[1px] bg-slate-200 mx-1" />
+            
+            {(drawingTool === 'pen' || drawingTool === 'highlighter') && (
+              <div className="flex items-center gap-2 px-2 border-r border-slate-200 mr-1 bg-white/50 rounded-full py-0.5">
+                <Square size={8} className="text-slate-400 fill-slate-400" />
+                <input 
+                  type="range" 
+                  min={drawingTool === 'pen' ? "1" : "4"} 
+                  max={drawingTool === 'pen' ? "20" : "80"} 
+                  step="1" 
+                  value={drawingTool === 'pen' ? penWidth : highlighterWidth}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    if (drawingTool === 'pen') setPenWidth(val);
+                    else setHighlighterWidth(val);
+                  }}
+                  className="w-16 h-1 accent-indigo-600 cursor-pointer"
+                />
+                <span className="text-[9px] font-mono font-bold text-slate-500 w-4">{drawingTool === 'pen' ? penWidth : highlighterWidth}</span>
+              </div>
+            )}
+
             <button 
               onClick={() => setDrawingTool(drawingTool === 'pen' ? 'hand' : 'pen')}
               className={`p-2 rounded-full transition-all ${drawingTool === 'pen' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-600 hover:bg-white hover:shadow-sm'}`}
@@ -616,7 +857,16 @@ export default function App() {
               paths={activeMapData.paths || []}
               setPaths={setPaths}
               drawingTool={drawingTool}
+              setDrawingTool={setDrawingTool}
               currentColor={currentColor}
+              penWidth={penWidth}
+              highlighterWidth={highlighterWidth}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              onCopy={onCopy}
+              onPaste={onPaste}
+              onSnapshot={onSnapshot}
+              clipboardAvailable={!!clipboard}
             />
           )}
         </div>
@@ -634,12 +884,18 @@ export default function App() {
           }} 
           onClose={() => setActivePdf(null)}
           onClip={(clip) => {
+            onSnapshot();
+            const center = screenToFlowPosition({ 
+              x: window.innerWidth / 2 + 128, 
+              y: window.innerHeight / 2 
+            });
+
             if (clip.type === 'pdf-section' && clip.pages) {
               const groupId = uuidv4();
               
               let currentY = 80;
               const pageNodes: WorkspaceNode[] = clip.pages.map((p) => {
-                const width = 600; // Actual document size for the canvas map
+                const width = 600; 
                 const height = width / (p.aspectRatio || 0.707);
                 const node: WorkspaceNode = {
                   id: uuidv4(),
@@ -654,17 +910,18 @@ export default function App() {
                     aspectRatio: p.aspectRatio
                   }
                 };
-                currentY += height + 40; // Add page height + vertical gap
+                currentY += height + 40;
                 return node;
               });
 
               const groupNode: WorkspaceNode = {
                 id: groupId,
                 type: 'group',
-                position: { x: 100, y: 100 },
+                position: { x: center.x - 340, y: center.y - (currentY / 2) },
                 style: { 
                   width: 680, 
-                  height: currentY + 40 // Final calculated height with bottom padding
+                  height: currentY + 40,
+                  zIndex: -1
                 },
                 data: { label: clip.text || 'Document Section', type: 'group' }
               };
@@ -677,10 +934,10 @@ export default function App() {
               setNodes((nds) => [...nds, {
                 id: uuidv4(),
                 type: clip.type === 'pdf-page' ? 'pdfPage' : 'pdfSnippet',
-                position: { x: 100, y: 100 },
+                position: { x: center.x - (width / 2), y: center.y - (height / 2) },
                 style: { width, height },
                 data: { 
-                  label: clip.type === 'pdf-page' ? `Page from ${activePdf.name}` : clip.text || `Exerpt: ${activePdf.name}`, 
+                  label: clip.type === 'pdf-page' ? `Page from ${activePdf?.name || 'Document'}` : clip.text || `Exerpt: ${activePdf?.name || 'Document'}`, 
                   type: clip.type || 'pdf-clip',
                   imageUrl: clip.imageUrl,
                   content: clip.text,
@@ -688,6 +945,7 @@ export default function App() {
                 }
               }]);
             }
+            setDrawingTool('hand');
             setActivePdf(null);
           }}
         />

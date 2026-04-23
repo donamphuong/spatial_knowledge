@@ -451,7 +451,7 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
                         <div className={`relative w-[100px] transition-all bg-white shadow-sm ring-1 ring-black/5 overflow-hidden ${isActive ? 'ring-2 ring-indigo-500 shadow-indigo-100' : isSelected ? 'ring-2 ring-indigo-400 shadow-indigo-50' : 'hover:ring-black/10'}`}>
                           <Page 
                             pageNumber={pageIdx} 
-                            width={2048} 
+                            width={150} 
                             className="pdf-thumbnail-page bg-white"
                             renderAnnotationLayer={false}
                             renderTextLayer={false}
@@ -516,6 +516,29 @@ export default function PDFViewerModal({ file, onClose, onClip }: PDFViewerModal
             >
               {Array.from(new Array(numPages), (el, index) => {
                 const p = index + 1;
+                // Performance Optimization: Virtual window rendering
+                // Only render pages that are within a reasonable range of the current page
+                const isNearCurrent = Math.abs(p - pageNumber) <= 3;
+                const isInitialPages = p <= 5 && pageNumber <= 5;
+                const shouldRender = isNearCurrent || isInitialPages || documentRendered === false;
+                
+                if (!shouldRender) {
+                    return (
+                      <div 
+                        key={p} 
+                        id={`main-page-${p}`}
+                        data-page-number={p}
+                        className="pdf-page-container bg-white shadow-md ring-1 ring-slate-200 rounded-sm flex items-center justify-center text-slate-300 font-mono text-[10px]"
+                        style={{ 
+                          width: scale * 595, // Approximately A4 width
+                          height: scale * 842  // Approximately A4 height
+                        }}
+                      >
+                        PAGE {p} / {numPages}
+                      </div>
+                    );
+                }
+
                 return (
                   <div 
                     key={p} 

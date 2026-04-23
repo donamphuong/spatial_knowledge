@@ -101,3 +101,21 @@
   margin: 0 !important;
   display: block !important;
 }
+
+/* Connection Line Animation */
+@keyframes dash {
+  from {
+    stroke-dashoffset: 12;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animated-connection {
+  stroke-dasharray: 6;
+  animation: dash 0.3s linear infinite;
+  stroke: #6366f1;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 2px rgba(99, 102, 241, 0.3));
+}
